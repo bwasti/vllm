@@ -20,6 +20,7 @@ from vllm.attention.backends.abstract import (AttentionBackend, AttentionImpl,
                                               AttentionType)
 from vllm.config import CUDAGraphMode, VllmConfig
 from vllm.logger import init_logger
+from vllm.model_executor.layers.determinism import vllm_kernel_override_determinism_all
 from vllm.model_executor.layers.quantization.utils.quant_utils import (
     QuantKey, kFp8StaticTensorSym, kNvfp4Quant)
 from vllm.platforms import current_platform
@@ -262,6 +263,11 @@ class FlashInferMetadataBuilder(AttentionMetadataBuilder[FlashInferMetadata]):
         self._workspace_buffer = None
         self._prefill_wrapper = None  # Wrapper for prefill/append
         self._decode_wrapper = None  # Wrapper for decode (general shape)
+
+        if vllm_kernel_override_determinism_all():
+            self.decode_fixed_split_size = 2048
+            self.prefill_fixed_split_size = 4096
+            self.disable_split_kv = True
 
         self.compilation_config = vllm_config.compilation_config
         max_num_pages_per_req = cdiv(self.model_config.max_model_len,
@@ -615,6 +621,8 @@ class FlashInferMetadataBuilder(AttentionMetadataBuilder[FlashInferMetadata]):
                         logits_soft_cap=self.logits_soft_cap,
                         q_data_type=self.q_data_type,
                         kv_data_type=self.kv_cache_dtype,
+                        fixed_split_size=self.prefill_fixed_split_size,
+                        disable_split_kv=self.disable_split_kv,
                     )
                 else:
                     attn_metadata.qo_indptr_gpu = qo_indptr_cpu.to(
@@ -668,6 +676,8 @@ class FlashInferMetadataBuilder(AttentionMetadataBuilder[FlashInferMetadata]):
                         logits_soft_cap=self.logits_soft_cap,
                         q_data_type=self.q_data_type,
                         kv_data_type=self.kv_cache_dtype,
+                        fixed_split_size=self.decode_fixed_split_size,
+                        disable_split_kv=self.disable_split_kv,
                     )
         return attn_metadata
 
@@ -1046,6 +1056,8 @@ def fast_plan_decode(
     rope_scale: Optional[float] = None,
     rope_theta: Optional[float] = None,
     non_blocking: bool = True,
+    fixed_split_size: int = -1,
+    disable_split_kv: bool= False,
 ) -> None:
     """
     A faster version of BatchDecodeWithPagedKVCacheWrapper::plan used for
@@ -1083,6 +1095,10 @@ def fast_plan_decode(
             rope_scale,
             rope_theta,
             non_blocking,
+            None, # block_tables
+            None, # seq_lens
+            fixed_split_size,
+            disable_split_kv,
         )
         self.vllm_first_call = False
         return
@@ -1145,6 +1161,9 @@ def fast_plan_decode(
             head_dim,
             head_dim,
             False,  # causal
+            window_left,
+            fixed_split_size,
+            disable_split_kv,
         )
     except Exception as e:
         raise RuntimeError(f"Error in tensor core plan: {e}") from e

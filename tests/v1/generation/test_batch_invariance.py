@@ -80,13 +80,16 @@ def test_v1_generation_is_deterministic_across_batch_sizes_with_needle():
     # Allow overrides from environment (useful for CI tuning)
     # "facebook/opt-125m" is too small, doesn't reliably test determinism
     model = os.getenv("VLLM_TEST_MODEL", "Qwen/Qwen3-1.7B")
-    num_trials = int(os.getenv("VLLM_NEEDLE_TRIALS", "5"))
-    batch_size = int(os.getenv("VLLM_NEEDLE_BATCH_SIZE", "64"))
-    assert batch_size >= 2, "Batch size should be >= 2 to mix needle."
+    #model = os.getenv("VLLM_TEST_MODEL", "ibm-research/PowerMoE-3b")
+    num_trials = int(os.getenv("VLLM_NEEDLE_TRIALS", "10"))
+    max_batch_size = int(os.getenv("VLLM_NEEDLE_BATCH_SIZE", "128"))
+    min_random_prompt = int(os.getenv("VLLM_MIN_PROMPT", "1024"))
+    max_random_prompt = int(os.getenv("VLLM_MAX_PROMPT", "2048"))
+    assert max_batch_size >= 2, "Batch size should be >= 2 to mix needle."
 
     # Keep GPU memory usage low to avoid startup allocation failures.
-    gpu_mem_util = float(os.getenv("VLLM_GPU_MEMORY_UTILIZATION", "0.3"))
-    max_model_len = int(os.getenv("VLLM_MAX_MODEL_LEN", "4096"))
+    gpu_mem_util = float(os.getenv("VLLM_GPU_MEMORY_UTILIZATION", "0.4"))
+    max_model_len = int(os.getenv("VLLM_MAX_MODEL_LEN", "5120"))
     swap_space_gb = int(os.getenv("VLLM_SWAP_SPACE_GB", "4"))
 
     # Sampling parameters: longer outputs with a more random-sounding
@@ -110,7 +113,7 @@ def test_v1_generation_is_deterministic_across_batch_sizes_with_needle():
         # Engine with bs=1 behavior
         llm_bs1 = LLM_with_max_seqs(
             model=model,
-            max_num_seqs=1,
+            max_num_seqs=128,
             gpu_memory_utilization=gpu_mem_util,
             max_model_len=max_model_len,
             swap_space=swap_space_gb,
@@ -125,7 +128,7 @@ def test_v1_generation_is_deterministic_across_batch_sizes_with_needle():
         # Engine with larger batch limit (e.g., 64)
         llm_bsN = LLM_with_max_seqs(
             model=model,
-            max_num_seqs=batch_size,
+            max_num_seqs=128,
             gpu_memory_utilization=gpu_mem_util,
             max_model_len=max_model_len,
             swap_space=swap_space_gb,
@@ -134,15 +137,16 @@ def test_v1_generation_is_deterministic_across_batch_sizes_with_needle():
         mismatches = 0
 
         for trial in range(num_trials):
-            # Create a batch of size `batch_size` and insert the needle at
+            # Create a batch of size `max_batch_size` and insert the needle at
             # a random index
             prompts: list[str] = []
+            batch_size = random.randint(max_batch_size // 2, max_batch_size)
             needle_pos = random.randint(0, batch_size - 1)
             for i in range(batch_size):
                 if i == needle_pos:
                     prompts.append(needle_prompt)
                 else:
-                    prompts.append(_random_prompt())
+                    prompts.append(_random_prompt(min_random_prompt, max_random_prompt))
 
             # Generate with the larger-batch engine
             outputs = llm_bsN.generate(prompts, sampling)
@@ -153,17 +157,18 @@ def test_v1_generation_is_deterministic_across_batch_sizes_with_needle():
             text = needle_output.outputs[0].text
 
             if text != baseline_text:
+                print(f"{text}\n\n=====not the same as=====\n\n{baseline_text}\n\n")
                 mismatches += 1
 
         passes = num_trials - mismatches
         # Dump how many passed vs failed
         print(f"[determinism] total={num_trials}, passed={passes}, "
-              f"failed={mismatches}, batch_size={batch_size}")
+              f"failed={mismatches}, max_batch_size={max_batch_size}")
 
         if mismatches > 0:
             pytest.fail(
                 f"Nondeterministic outputs detected: {mismatches} failed out "
-                f"of {num_trials} trials (batch_size={batch_size}).")
+                f"of {num_trials} trials (max_batch_size={max_batch_size}).")
 
     finally:
         # Ensure engines are shutdown to free GPU/VRAM across test sessions
@@ -201,3 +206,4 @@ def LLM_with_max_seqs(
         tensor_parallel_size=int(os.getenv("VLLM_TP_SIZE", "1")),
         trust_remote_code=os.getenv("VLLM_TRUST_REMOTE_CODE", "0") == "1",
     )
+
