@@ -13,8 +13,6 @@ import torch
 
 from tests.utils import multi_gpu_test
 from vllm.config import VllmConfig, set_current_vllm_config
-from vllm.distributed.parallel_state import (init_distributed_environment,
-                                             initialize_model_parallel)
 from vllm.model_executor.layers.fused_moe import fused_moe
 from vllm.model_executor.layers.fused_moe.fused_moe import fused_topk
 from vllm.platforms import current_platform
