@@ -170,6 +170,7 @@ class SchedulerConfig:
         return hash_str
 
     def __post_init__(self, is_encoder_decoder: bool) -> None:
+
         if self.max_model_len is None:
             self.max_model_len = 8192
 
