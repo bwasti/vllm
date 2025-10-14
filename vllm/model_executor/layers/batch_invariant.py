@@ -481,9 +481,29 @@ def matmul_batch_invariant(a, b, *, out=None):
     elif a.ndim == 3 and b.ndim == 3:
         # Handle batched case like bmm
         return bmm_batch_invariant(a, b, out=out)
+    elif a.ndim == 4 and b.ndim == 4:
+        # Handle 4D attention tensors: [batch, heads, seq, dim]
+        # Reshape to 3D, process, reshape back
+        batch, heads, seq_a, dim_a = a.shape
+        _, _, dim_b, seq_b = b.shape
+
+        # Reshape to [batch*heads, seq_a, dim_a]
+        a_3d = a.reshape(batch * heads, seq_a, dim_a)
+        b_3d = b.reshape(batch * heads, dim_b, seq_b)
+
+        # Do batched matmul
+        result_3d = bmm_batch_invariant(a_3d, b_3d)
+
+        # Reshape back to [batch, heads, seq_a, seq_b]
+        result = result_3d.reshape(batch, heads, seq_a, seq_b)
+
+        if out is not None:
+            out.copy_(result)
+            return out
+        return result
     else:
         raise ValueError(
-            f"matmul_batch_invariant currently only supports 2D x 2D and 3D x 3D, "
+            f"matmul_batch_invariant currently only supports 2D x 2D, 3D x 3D, and 4D x 4D, "
             f"got shapes {a.shape} and {b.shape}"
         )
 
@@ -670,7 +690,18 @@ def rms_norm_batch_invariant(
 
 
 def linear_batch_invariant(input, weight, bias=None):
-    output = mm_batch_invariant(input, weight.t())
+    # Handle 3D input tensors (batch, seq, hidden) by reshaping to 2D
+    input_shape = input.shape
+    if input.ndim == 3:
+        # Reshape (batch, seq, hidden) -> (batch*seq, hidden)
+        input_2d = input.reshape(-1, input.shape[-1])
+        output = mm_batch_invariant(input_2d, weight.t())
+        # Reshape back to (batch, seq, output_dim)
+        output = output.reshape(*input_shape[:-1], output.shape[-1])
+    else:
+        # 2D case: standard mm
+        output = mm_batch_invariant(input, weight.t())
+
     if bias is not None:
         output = output + bias
     return output

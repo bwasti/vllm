@@ -337,6 +337,15 @@ class Worker(WorkerBase):
             self.model_runner.initialize_kv_cache(kv_cache_config)
 
     def compile_or_warm_up_model(self) -> None:
+        # Skip warmup for custom models that don't follow vLLM's interface
+        # Custom models handle their own warmup and compilation
+        custom_model_info = getattr(self.vllm_config, "custom_model_instance", None)
+        logger.info(f"DEBUG: compile_or_warm_up_model called, custom_model={custom_model_info is not None}")
+        if custom_model_info is not None:
+            logger.info("Skipping warmup and compilation for custom model - custom models manage their own initialization")
+            return
+        logger.info("DEBUG: Proceeding with normal warmup (no custom model detected)")
+
         # warm up sizes that are not in cudagraph capture sizes,
         # but users still want to compile for better performance,
         # e.g. for the max-num-batched token size in chunked prefill.

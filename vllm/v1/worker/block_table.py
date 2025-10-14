@@ -82,8 +82,8 @@ class BlockTable:
         try:
             self.dcp_world_size = get_dcp_group().world_size
             self.dcp_rank = get_dcp_group().rank_in_group
-        except AssertionError:
-            # DCP might not be initialized in testing
+        except (AssertionError, RuntimeError):
+            # DCP might not be initialized in testing or when using custom models
             self.dcp_world_size = 1
             self.dcp_rank = 0
 
@@ -241,8 +241,8 @@ class MultiGroupBlockTable:
         # must be multiplied by dcp_world_size.
         try:
             dcp_world_size = get_dcp_group().world_size
-        except AssertionError:
-            # DCP might not be initialized in testing
+        except (AssertionError, RuntimeError):
+            # DCP might not be initialized in testing or when using custom models
             dcp_world_size = 1
 
         if len(kernel_block_sizes) != len(block_sizes):

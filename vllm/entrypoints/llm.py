@@ -186,7 +186,7 @@ class LLM:
 
     def __init__(
         self,
-        model: str,
+        model: str | nn.Module,
         *,
         runner: RunnerOption = "auto",
         convert: ConvertOption = "auto",
@@ -221,6 +221,29 @@ class LLM:
         **kwargs: Any,
     ) -> None:
         """LLM constructor."""
+
+        # Handle pre-instantiated model
+        if isinstance(model, nn.Module):
+            if tokenizer is None:
+                raise ValueError(
+                    "When passing a pre-instantiated model, you must provide a tokenizer path"
+                )
+            # For V1 engine with multiprocessing, we cannot directly pass the model
+            # because complex models (like TorchTitan) cannot be pickled.
+            # Instead, we save only the state_dict and pass reconstruction info.
+            import tempfile
+            import torch
+            temp_checkpoint = tempfile.NamedTemporaryFile(
+                suffix=".pt", delete=False, prefix="vllm_custom_model_"
+            )
+            temp_checkpoint.close()
+            # Save the state_dict (which CAN be pickled)
+            torch.save(model.state_dict(), temp_checkpoint.name)
+            # Store both the checkpoint path and the model instance
+            # The model instance will be used in the parent process (non-multiprocessing case)
+            # The checkpoint will be used in subprocess (multiprocessing case with spawn)
+            kwargs["custom_model_instance"] = (model, temp_checkpoint.name)
+            model = tokenizer  # Use tokenizer as model path for config loading
 
         if "disable_log_stats" not in kwargs:
             kwargs["disable_log_stats"] = True

@@ -529,6 +529,9 @@ class EngineArgs:
 
     kv_sharing_fast_prefill: bool = CacheConfig.kv_sharing_fast_prefill
 
+    # Custom model instance (for passing pre-instantiated models)
+    custom_model_instance: Any = None
+
     def __post_init__(self):
         # support `EngineArgs(compilation_config={...})`
         # without having to manually construct a
@@ -1590,6 +1593,7 @@ class EngineArgs:
             kv_transfer_config=self.kv_transfer_config,
             kv_events_config=self.kv_events_config,
             additional_config=self.additional_config,
+            custom_model_instance=self.custom_model_instance,
         )
 
         return config

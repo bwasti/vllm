@@ -113,19 +113,42 @@ class CpuGpuBuffer:
         pin_memory: bool,
         with_numpy: bool = True,
     ) -> None:
-        self.cpu = torch.zeros(*size, dtype=dtype, device="cpu", pin_memory=pin_memory)
+        logger.info(f"DEBUG: CpuGpuBuffer.__init__ starting, size={size}, dtype={dtype}, pin_memory={pin_memory}, with_numpy={with_numpy}")
+        logger.info("DEBUG: CpuGpuBuffer.__init__ about to create CPU tensor")
+
+        # Try with pinned memory first, fallback to non-pinned if it fails/hangs
+        try:
+            # For large buffers, use empty() instead of zeros() for faster allocation
+            # The buffer will be filled with actual data before use anyway
+            if pin_memory and len(size) > 1 and size[0] * size[1] > 1000000:
+                logger.info("DEBUG: CpuGpuBuffer.__init__ using torch.empty for large 2D buffer")
+                self.cpu = torch.empty(*size, dtype=dtype, device="cpu", pin_memory=True)
+            else:
+                self.cpu = torch.zeros(*size, dtype=dtype, device="cpu", pin_memory=pin_memory)
+            logger.info("DEBUG: CpuGpuBuffer.__init__ CPU tensor created successfully")
+        except Exception as e:
+            logger.warning(f"DEBUG: CpuGpuBuffer.__init__ pinned memory allocation failed: {e}, falling back to non-pinned")
+            self.cpu = torch.zeros(*size, dtype=dtype, device="cpu", pin_memory=False)
+            logger.info("DEBUG: CpuGpuBuffer.__init__ CPU tensor created (non-pinned) successfully")
+
+        logger.info("DEBUG: CpuGpuBuffer.__init__ about to create GPU tensor")
         self.gpu = torch.zeros_like(self.cpu, device=device)
+        logger.info("DEBUG: CpuGpuBuffer.__init__ GPU tensor created successfully")
         self.np: np.ndarray
         # To keep type hints simple (avoiding generics and subclasses), we
         # only conditionally create the numpy array attribute. This can cause
         # AttributeError if `self.np` is accessed when `with_numpy=False`.
         if with_numpy:
+            logger.info("DEBUG: CpuGpuBuffer.__init__ checking dtype for numpy conversion")
             if dtype == torch.bfloat16:
                 raise ValueError(
                     "Bfloat16 torch tensors cannot be directly cast to a "
                     "numpy array, so call CpuGpuBuffer with with_numpy=False"
                 )
+            logger.info("DEBUG: CpuGpuBuffer.__init__ about to create numpy view")
             self.np = self.cpu.numpy()
+            logger.info("DEBUG: CpuGpuBuffer.__init__ numpy view created successfully")
+        logger.info("DEBUG: CpuGpuBuffer.__init__ COMPLETED")
 
     def copy_to_gpu(self, n: int | None = None) -> torch.Tensor:
         if n is None:

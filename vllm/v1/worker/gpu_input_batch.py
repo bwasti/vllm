@@ -8,6 +8,7 @@ from typing import cast
 import numpy as np
 import torch
 
+from vllm.logger import init_logger
 from vllm.lora.request import LoRARequest
 from vllm.multimodal.inputs import MultiModalFeatureSpec
 from vllm.pooling_params import PoolingParams
@@ -24,6 +25,8 @@ from vllm.v1.sample.metadata import SamplingMetadata
 from vllm.v1.spec_decode.utils import is_spec_decode_unsupported
 from vllm.v1.utils import copy_slice
 from vllm.v1.worker.block_table import MultiGroupBlockTable
+
+logger = init_logger(__name__)
 
 
 @dataclass
@@ -84,6 +87,9 @@ class InputBatch:
         is_pooling_model: bool = False,
         num_speculative_tokens: int = 0,
     ):
+        logger.info("DEBUG: InputBatch.__init__ STARTED")
+        logger.info(f"DEBUG: InputBatch.__init__ max_num_reqs={max_num_reqs}, max_model_len={max_model_len}, device={device}")
+
         self.is_pooling_model = is_pooling_model
         self.is_spec_decode = is_spec_decode
         self.max_num_reqs = max_num_reqs
@@ -92,24 +98,30 @@ class InputBatch:
         self.device = device
         self.pin_memory = pin_memory
         self.vocab_size = vocab_size
+        logger.info("DEBUG: InputBatch.__init__ basic attributes set")
 
         self._req_ids: list[str | None] = []
         self.req_id_to_index: dict[str, int] = {}
+        logger.info("DEBUG: InputBatch.__init__ req_ids initialized")
 
         # TODO(woosuk): This buffer could be too large if max_model_len is big.
         # Find a way to reduce the CPU memory usage.
         # This buffer is not directly transferred to the GPU, so it does not
         # need to be pinned.
+        logger.info(f"DEBUG: InputBatch.__init__ about to allocate token_ids_cpu_tensor {max_num_reqs}, {max_model_len}")
         self.token_ids_cpu_tensor = torch.zeros(
             (max_num_reqs, max_model_len),
             device="cpu",
             dtype=torch.int32,
             pin_memory=False,
         )
+        logger.info("DEBUG: InputBatch.__init__ token_ids_cpu_tensor allocated")
         self.token_ids_cpu = self.token_ids_cpu_tensor.numpy()
+        logger.info("DEBUG: InputBatch.__init__ about to allocate is_token_ids")
         self.is_token_ids = torch.zeros(
             (max_num_reqs, max_model_len), device="cpu", dtype=bool, pin_memory=False
         )
+        logger.info("DEBUG: InputBatch.__init__ is_token_ids allocated")
         # Store prompt embeddings per request to avoid OOM from large upfront
         # allocation if max_model_len is big.
         # Maps req_index -> tensor of shape (num_prompt_tokens, hidden_size)
@@ -117,15 +129,19 @@ class InputBatch:
         self.num_tokens = np.zeros(max_num_reqs, dtype=np.int32)
         self.num_tokens_no_spec = np.zeros(max_num_reqs, dtype=np.int32)
         self.num_prompt_tokens = np.zeros(max_num_reqs, dtype=np.int32)
+        logger.info("DEBUG: InputBatch.__init__ about to allocate num_computed_tokens_cpu_tensor")
         self.num_computed_tokens_cpu_tensor = torch.zeros(
             (max_num_reqs,),
             device="cpu",
             dtype=torch.int32,
             pin_memory=pin_memory,
         )
+        logger.info("DEBUG: InputBatch.__init__ num_computed_tokens_cpu_tensor allocated")
         self.num_computed_tokens_cpu = self.num_computed_tokens_cpu_tensor.numpy()
+        logger.info("DEBUG: InputBatch.__init__ numpy arrays initialized")
 
         # Block table.
+        logger.info("DEBUG: InputBatch.__init__ about to create MultiGroupBlockTable")
         self.block_table = MultiGroupBlockTable(
             max_num_reqs=max_num_reqs,
             max_model_len=max_model_len,
@@ -136,8 +152,10 @@ class InputBatch:
             kernel_block_sizes=kernel_block_sizes,
             num_speculative_tokens=num_speculative_tokens,
         )
+        logger.info("DEBUG: InputBatch.__init__ MultiGroupBlockTable created")
 
         # Sampling-related.
+        logger.info("DEBUG: InputBatch.__init__ starting sampling-related initialization")
         self.temperature = torch.empty(
             (max_num_reqs,), dtype=torch.float32, device=device
         )
@@ -200,6 +218,7 @@ class InputBatch:
             (max_num_reqs,), dtype=torch.int64, device="cpu", pin_memory=pin_memory
         )
         self.num_accepted_tokens_cpu = self.num_accepted_tokens_cpu_tensor.numpy()
+        logger.info("DEBUG: InputBatch.__init__ sampling tensors created")
 
         # lora related
         self.request_lora_mapping = np.zeros((self.max_num_reqs,), dtype=np.int32)
@@ -246,8 +265,10 @@ class InputBatch:
         # Store last speculative tokens for sampler.
         self.spec_token_ids: list[list[int] | None] = []
 
+        logger.info("DEBUG: InputBatch.__init__ about to call _make_sampling_metadata()")
         # This is updated each time the batch constituents change.
         self.sampling_metadata = self._make_sampling_metadata()
+        logger.info("DEBUG: InputBatch.__init__ _make_sampling_metadata() completed")
 
         self.pooling_params: dict[str, PoolingParams] = {}
 
@@ -259,6 +280,8 @@ class InputBatch:
         # (e.g. penalties).
         self.sampled_token_ids_cpu: torch.Tensor | None = None
         self.async_copy_ready_event: torch.cuda.Event | None = None
+
+        logger.info("DEBUG: InputBatch.__init__ COMPLETED")
 
     @property
     def req_ids(self) -> list[str]:

@@ -103,6 +103,8 @@ class VllmConfig:
     you are using. Contents must be hashable."""
     instance_id: str = ""
     """The ID of the vLLM instance."""
+    custom_model_instance: Any = None
+    """Pre-instantiated model instance to use instead of loading from disk."""
 
     def compute_hash(self) -> str:
         """

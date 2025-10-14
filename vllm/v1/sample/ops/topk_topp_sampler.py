@@ -49,7 +49,9 @@ class TopKTopPSampler(nn.Module):
                 elif envs.VLLM_USE_FLASHINFER_SAMPLER:
                     # Users must opt in explicitly via VLLM_USE_FLASHINFER_SAMPLER=1.
                     logger.info_once("Using FlashInfer for top-p & top-k sampling.")
+                    logger.info("DEBUG: About to set self.forward = self.forward_cuda")
                     self.forward = self.forward_cuda
+                    logger.info("DEBUG: Successfully set self.forward = self.forward_cuda")
                 else:
                     logger.debug_once(
                         "FlashInfer top-p/top-k sampling is available but disabled "
@@ -72,7 +74,9 @@ class TopKTopPSampler(nn.Module):
         else:
             self.forward = self.forward_native
 
+        logger.info("DEBUG: TopKTopPSampler.__init__ about to set apply_top_k_top_p")
         self.apply_top_k_top_p = apply_top_k_top_p
+        logger.info("DEBUG: TopKTopPSampler.__init__ completed successfully")
 
     def forward_native(
         self,

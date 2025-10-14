@@ -217,33 +217,52 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
         vllm_config: VllmConfig,
         device: torch.device,
     ):
+        logger.info("DEBUG: GPUModelRunner.__init__ STARTED")
+        logger.info("DEBUG: GPUModelRunner.__init__ storing vllm_config")
         self.vllm_config = vllm_config
+        logger.info("DEBUG: GPUModelRunner.__init__ extracting model_config")
         self.model_config = vllm_config.model_config
+        logger.info("DEBUG: GPUModelRunner.__init__ extracting cache_config")
         self.cache_config = vllm_config.cache_config
+        logger.info("DEBUG: GPUModelRunner.__init__ extracting compilation_config")
         self.compilation_config = vllm_config.compilation_config
+        logger.info("DEBUG: GPUModelRunner.__init__ extracting lora_config")
         self.lora_config = vllm_config.lora_config
+        logger.info("DEBUG: GPUModelRunner.__init__ extracting load_config")
         self.load_config = vllm_config.load_config
+        logger.info("DEBUG: GPUModelRunner.__init__ extracting parallel_config")
         self.parallel_config = vllm_config.parallel_config
+        logger.info("DEBUG: GPUModelRunner.__init__ extracting scheduler_config")
         self.scheduler_config = vllm_config.scheduler_config
+        logger.info("DEBUG: GPUModelRunner.__init__ extracting speculative_config")
         self.speculative_config = vllm_config.speculative_config
+        logger.info("DEBUG: GPUModelRunner.__init__ extracting observability_config")
         self.observability_config = vllm_config.observability_config
 
         from vllm.model_executor.models.utils import set_cpu_offload_max_bytes
 
+        logger.info("DEBUG: GPUModelRunner.__init__ about to set_cpu_offload_max_bytes")
         set_cpu_offload_max_bytes(int(self.cache_config.cpu_offload_gb * 1024**3))
+        logger.info("DEBUG: GPUModelRunner.__init__ set_cpu_offload_max_bytes completed")
 
+        logger.info("DEBUG: GPUModelRunner.__init__ storing config references")
         model_config = self.model_config
         cache_config = self.cache_config
         scheduler_config = self.scheduler_config
         parallel_config = self.parallel_config
+        logger.info("DEBUG: GPUModelRunner.__init__ setting device and pin_memory")
         self.device = device
         self.pin_memory = is_pin_memory_available()
+        logger.info("DEBUG: GPUModelRunner.__init__ setting dtype")
         self.dtype = self.model_config.dtype
+        logger.info("DEBUG: GPUModelRunner.__init__ setting kv_cache_dtype")
         if cache_config.cache_dtype == "auto":
             self.kv_cache_dtype = self.dtype
         else:
             self.kv_cache_dtype = STR_DTYPE_TO_TORCH_DTYPE[cache_config.cache_dtype]
+        logger.info("DEBUG: GPUModelRunner.__init__ dtype configuration completed")
 
+        logger.info("DEBUG: GPUModelRunner.__init__ setting model type flags")
         self.is_pooling_model = model_config.runner_type == "pooling"
         self.enable_prompt_embeds = model_config.enable_prompt_embeds
         self.is_multimodal_raw_input_only_model = (
@@ -251,21 +270,26 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
         )
         # This will be overridden in load_model()
         self.is_multimodal_pruning_enabled = False
+        logger.info("DEBUG: GPUModelRunner.__init__ setting max values")
         self.max_model_len = model_config.max_model_len
         self.dcp_world_size = self.parallel_config.decode_context_parallel_size
         self.max_num_tokens = scheduler_config.max_num_batched_tokens
         self.max_num_reqs = scheduler_config.max_num_seqs
+        logger.info(f"DEBUG: GPUModelRunner.__init__ max values: max_model_len={self.max_model_len}, dcp_world_size={self.dcp_world_size}, max_num_tokens={self.max_num_tokens}, max_num_reqs={self.max_num_reqs}")
 
         # Broadcast PP output for external_launcher (torchrun)
         # to make sure we are synced across pp ranks
         # TODO: Support overlapping mirco-batches
         # https://github.com/vllm-project/vllm/issues/18019
+        logger.info("DEBUG: GPUModelRunner.__init__ checking broadcast_pp_output")
         self.broadcast_pp_output = (
             self.parallel_config.distributed_executor_backend == "external_launcher"
             and len(get_pp_group().ranks) > 0
         )
+        logger.info(f"DEBUG: GPUModelRunner.__init__ broadcast_pp_output={self.broadcast_pp_output}")
 
         # Model-related.
+        logger.info("DEBUG: GPUModelRunner.__init__ getting model-related properties")
         self.num_query_heads = model_config.get_num_attention_heads(parallel_config)
         self.hidden_size = model_config.get_hidden_size()
         self.attention_chunk_size = model_config.attention_chunk_size
@@ -273,24 +297,33 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
         self.use_alibi = check_use_alibi(model_config)
 
         self.cascade_attn_enabled = not self.model_config.disable_cascade_attn
+        logger.info(f"DEBUG: GPUModelRunner.__init__ model properties: num_query_heads={self.num_query_heads}, hidden_size={self.hidden_size}, cascade_attn_enabled={self.cascade_attn_enabled}")
 
         # Multi-modal data support
+        logger.info("DEBUG: GPUModelRunner.__init__ setting up multimodal support")
         self.mm_registry = MULTIMODAL_REGISTRY
         self.uses_mrope = model_config.uses_mrope
         self.supports_mm_inputs = self.mm_registry.supports_multimodal_inputs(
             model_config
         )
+        logger.info(f"DEBUG: GPUModelRunner.__init__ multimodal: uses_mrope={self.uses_mrope}, supports_mm_inputs={self.supports_mm_inputs}")
 
+        logger.info("DEBUG: GPUModelRunner.__init__ checking encoder-decoder")
         if self.model_config.is_encoder_decoder:
             # Maximum length of the encoder input, only for encoder-decoder
             # models.
             self.max_encoder_len = scheduler_config.max_num_encoder_input_tokens
+            logger.info(f"DEBUG: GPUModelRunner.__init__ encoder-decoder model, max_encoder_len={self.max_encoder_len}")
         else:
             self.max_encoder_len = 0
+            logger.info("DEBUG: GPUModelRunner.__init__ not encoder-decoder model")
 
         # Sampler
+        logger.info("DEBUG: GPUModelRunner.__init__ about to create Sampler")
         self.sampler = Sampler(logprobs_mode=self.model_config.logprobs_mode)
+        logger.info("DEBUG: GPUModelRunner.__init__ Sampler created successfully")
 
+        logger.info("DEBUG: GPUModelRunner.__init__ initializing eplb_state")
         self.eplb_state: EplbState | None = None
         """
         State of the expert parallelism load balancer.
@@ -301,19 +334,23 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
         # Lazy initializations
         # self.model: nn.Module  # Set after load_model
         # Initialize in initialize_kv_cache
+        logger.info("DEBUG: GPUModelRunner.__init__ initializing kv_caches and attn_groups")
         self.kv_caches: list[torch.Tensor] = []
         # indexes: [kv_cache_group_id][attn_group]
         self.attn_groups: list[list[AttentionGroup]] = []
         # self.kv_cache_config: KVCacheConfig
 
         # mm_hash ->  encoder_output
+        logger.info("DEBUG: GPUModelRunner.__init__ initializing encoder_cache")
         self.encoder_cache: dict[str, torch.Tensor] = {}
 
+        logger.info("DEBUG: GPUModelRunner.__init__ initializing use_aux_hidden_state_outputs")
         self.use_aux_hidden_state_outputs = False
         # Set up speculative decoding.
         # NOTE(Jiayi): currently we put the entire draft model on
         # the last PP rank. This is not ideal if there are many
         # layers in the draft model.
+        logger.info("DEBUG: GPUModelRunner.__init__ checking speculative_config")
         if self.speculative_config and get_pp_group().is_last_rank:
             if self.speculative_config.method == "ngram":
                 self.drafter = NgramProposer(self.vllm_config)
@@ -330,13 +367,20 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
                     "Unknown speculative decoding method: "
                     f"{self.speculative_config.method}"
                 )
+            logger.info("DEBUG: GPUModelRunner.__init__ creating rejection_sampler")
             self.rejection_sampler = RejectionSampler()
+            logger.info("DEBUG: GPUModelRunner.__init__ rejection_sampler created")
 
         # Request states.
+        logger.info("DEBUG: GPUModelRunner.__init__ about to initialize requests dict")
         self.requests: dict[str, CachedRequestState] = {}
+        logger.info("DEBUG: GPUModelRunner.__init__ requests dict initialized")
+        logger.info("DEBUG: GPUModelRunner.__init__ about to create comm_stream")
         self.comm_stream = torch.cuda.Stream()
+        logger.info("DEBUG: GPUModelRunner.__init__ comm_stream created successfully")
 
         # Input Batch
+        logger.info("DEBUG: GPUModelRunner.__init__ about to create InputBatch")
         # NOTE(Chen): Ideally, we should initialize the input batch inside
         # `initialize_kv_cache` based on the kv cache config. However, as in
         # https://github.com/vllm-project/vllm/pull/18298, due to some unknown
@@ -345,7 +389,33 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
         # solution, we initialize the input batch here, and re-initialize it
         # in `initialize_kv_cache` if the block_sizes here is different from
         # the block_sizes in the kv cache config.
+        logger.info("DEBUG: GPUModelRunner.__init__ about to get custom_logitsprocs")
         custom_logitsprocs = model_config.logits_processors
+        logger.info("DEBUG: GPUModelRunner.__init__ got custom_logitsprocs")
+
+        logger.info("DEBUG: GPUModelRunner.__init__ preparing InputBatch parameters:")
+        logger.info(f"DEBUG:   max_num_reqs={self.max_num_reqs}")
+        logger.info(f"DEBUG:   max_model_len={max(self.max_model_len, self.max_encoder_len)}")
+        logger.info(f"DEBUG:   max_num_batched_tokens={self.max_num_tokens}")
+        logger.info(f"DEBUG:   device={self.device}")
+        logger.info(f"DEBUG:   pin_memory={self.pin_memory}")
+        logger.info(f"DEBUG:   vocab_size={self.model_config.get_vocab_size()}")
+        logger.info(f"DEBUG:   block_sizes={[self.cache_config.block_size]}")
+        logger.info(f"DEBUG:   kernel_block_sizes={[self.cache_config.block_size]}")
+        logger.info(f"DEBUG:   is_spec_decode={bool(self.vllm_config.speculative_config)}")
+        logger.info(f"DEBUG:   is_pooling_model={self.is_pooling_model}")
+
+        logger.info("DEBUG: GPUModelRunner.__init__ about to call build_logitsprocs()")
+        logitsprocs = build_logitsprocs(
+            self.vllm_config,
+            self.device,
+            self.pin_memory,
+            self.is_pooling_model,
+            custom_logitsprocs,
+        )
+        logger.info("DEBUG: GPUModelRunner.__init__ build_logitsprocs() completed")
+
+        logger.info("DEBUG: GPUModelRunner.__init__ about to call InputBatch()")
         self.input_batch = InputBatch(
             max_num_reqs=self.max_num_reqs,
             # We need to use the encoder length for encoder-decoer
@@ -358,19 +428,15 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
             block_sizes=[self.cache_config.block_size],
             kernel_block_sizes=[self.cache_config.block_size],
             is_spec_decode=bool(self.vllm_config.speculative_config),
-            logitsprocs=build_logitsprocs(
-                self.vllm_config,
-                self.device,
-                self.pin_memory,
-                self.is_pooling_model,
-                custom_logitsprocs,
-            ),
+            logitsprocs=logitsprocs,
             # We currently don't know whether a particular custom logits processor
             # uses output token ids so we set this conservatively.
             logitsprocs_need_output_token_ids=bool(custom_logitsprocs),
             is_pooling_model=self.is_pooling_model,
         )
+        logger.info("DEBUG: GPUModelRunner.__init__ InputBatch created successfully!")
 
+        logger.info("DEBUG: GPUModelRunner.__init__ setting up async scheduling")
         self.use_async_scheduling = self.scheduler_config.async_scheduling
         # Separate cuda stream for overlapping transfer of sampled token ids from
         # GPU to CPU when async scheduling is enabled.
@@ -381,11 +447,13 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
         if self.use_async_scheduling:
             self.async_output_copy_stream = torch.cuda.Stream()
             self.prepare_inputs_event = torch.cuda.Event()
+        logger.info(f"DEBUG: GPUModelRunner.__init__ use_async_scheduling={self.use_async_scheduling}")
 
         # TODO(woosuk): Provide an option to tune the max cudagraph batch size.
         # The convention is different.
         # self.cudagraph_batch_sizes sorts in ascending order.
         # The batch sizes in the config are in descending order.
+        logger.info("DEBUG: GPUModelRunner.__init__ setting up cudagraph_batch_sizes")
         if (
             self.compilation_config.cudagraph_capture_sizes
             and self.compilation_config.cudagraph_mode != CUDAGraphMode.NONE
@@ -393,42 +461,58 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
             self.cudagraph_batch_sizes = list(
                 reversed(self.compilation_config.cudagraph_capture_sizes)
             )
+            logger.info(f"DEBUG: GPUModelRunner.__init__ cudagraph_batch_sizes={self.cudagraph_batch_sizes}")
 
+        logger.info("DEBUG: GPUModelRunner.__init__ about to call self._init_device_properties()")
         # Cache the device properties.
         self._init_device_properties()
+        logger.info("DEBUG: GPUModelRunner.__init__ _init_device_properties() completed")
 
         # Persistent buffers for CUDA graphs.
+        logger.info(f"DEBUG: GPUModelRunner.__init__ creating input_ids buffer size=({self.max_num_tokens},)")
         self.input_ids = self._make_buffer(self.max_num_tokens, dtype=torch.int32)
+        logger.info(f"DEBUG: GPUModelRunner.__init__ creating positions buffer size=({self.max_num_tokens},)")
         self.positions = self._make_buffer(self.max_num_tokens, dtype=torch.int64)
+        logger.info(f"DEBUG: GPUModelRunner.__init__ creating query_start_loc buffer size=({self.max_num_reqs + 1},)")
         self.query_start_loc = self._make_buffer(
             self.max_num_reqs + 1, dtype=torch.int32
         )
+        logger.info(f"DEBUG: GPUModelRunner.__init__ creating seq_lens buffer size=({self.max_num_reqs},)")
         self.seq_lens = self._make_buffer(self.max_num_reqs, dtype=torch.int32)
         if self.dcp_world_size > 1:
+            logger.info(f"DEBUG: GPUModelRunner.__init__ creating dcp_local_seq_lens buffer size=({self.max_num_reqs},) (dcp_world_size > 1)")
             self.dcp_local_seq_lens = self._make_buffer(
                 self.max_num_reqs, dtype=torch.int32
             )
         # Because inputs_embeds may be bfloat16 and we don't need a numpy
         # version of this tensor, avoid a RuntimeError by not creating a
         # numpy buffer.
+        logger.info(f"DEBUG: GPUModelRunner.__init__ creating inputs_embeds buffer size=({self.max_num_tokens}, {self.hidden_size})")
         self.inputs_embeds = self._make_buffer(
             self.max_num_tokens, self.hidden_size, dtype=self.dtype, numpy=False
         )
+        logger.info(f"DEBUG: GPUModelRunner.__init__ creating is_token_ids buffer size=({self.max_num_tokens},)")
         self.is_token_ids = self._make_buffer(self.max_num_tokens, dtype=torch.bool)
+        logger.info(f"DEBUG: GPUModelRunner.__init__ creating discard_request_indices buffer size=({self.max_num_reqs},)")
         self.discard_request_indices = self._make_buffer(
             self.max_num_reqs, dtype=torch.int64
         )
         self.num_discarded_requests = 0
+        logger.info("DEBUG: GPUModelRunner.__init__ initializing num_discarded_requests")
 
+        logger.info(f"DEBUG: GPUModelRunner.__init__ creating num_decode_draft_tokens buffer size=({self.max_num_reqs},)")
         self.num_decode_draft_tokens = self._make_buffer(
             self.max_num_reqs, dtype=torch.int32
         )
+        logger.info(f"DEBUG: GPUModelRunner.__init__ creating num_accepted_tokens buffer size=({self.max_num_reqs},)")
         self.num_accepted_tokens = self._make_buffer(
             self.max_num_reqs, dtype=torch.int64
         )
+        logger.info("DEBUG: GPUModelRunner.__init__ persistent buffers created")
 
         # Only relevant for multimodal models
         if self.supports_mm_inputs:
+            logger.info(f"DEBUG: GPUModelRunner.__init__ creating is_mm_embed buffer size=({self.max_num_tokens},)")
             self.is_mm_embed = self._make_buffer(self.max_num_tokens, dtype=torch.bool)
 
         # Only relevant for models using M-RoPE (e.g, Qwen2-VL)
@@ -443,6 +527,7 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
             # identical position IDs, making M-RoPE functionally equivalent to
             # 1D-RoPE.
             # See page 5 of https://arxiv.org/abs/2409.12191
+            logger.info(f"DEBUG: GPUModelRunner.__init__ creating mrope_positions buffer size=(3, {self.max_num_tokens + 1})")
             self.mrope_positions = self._make_buffer(
                 (3, self.max_num_tokens + 1), dtype=torch.int64
             )
@@ -2840,6 +2925,28 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
         Args:
             eep_scale_up: the model loading is for elastic EP scale up.
         """
+        # Check if a custom model was provided
+        custom_model_info = getattr(self.vllm_config, "custom_model_instance", None)
+        if custom_model_info is not None:
+            logger.info("Loading pre-instantiated custom model: %s", custom_model_info)
+            # custom_model_info is a tuple of (model_instance, checkpoint_path)
+            custom_model, checkpoint_path = custom_model_info
+            # Move model to the correct device
+            custom_model = custom_model.to(device=self.device)
+            self.model = custom_model
+            self.model_memory_usage = sum(
+                p.numel() * p.element_size() for p in custom_model.parameters()
+            )
+            # Clean up the temporary checkpoint file
+            import os
+            try:
+                os.unlink(checkpoint_path)
+                logger.info("Cleaned up temporary checkpoint file: %s", checkpoint_path)
+            except Exception as e:
+                logger.warning("Failed to clean up temporary checkpoint file %s: %s", checkpoint_path, e)
+            # Skip the normal loading process
+            return
+
         logger.info("Starting to load model %s...", self.model_config.model)
         if eep_scale_up:
             from vllm.distributed.parallel_state import get_ep_group
@@ -3647,6 +3754,20 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
         return self._dummy_pooler_run_task(hidden_states, max_task)
 
     def profile_run(self) -> None:
+        # Skip profiling for custom models that don't follow vLLM's interface
+        # Custom models handle their own memory management
+        custom_model_info = getattr(self.vllm_config, "custom_model_instance", None)
+        logger.info(f"DEBUG: profile_run called, custom_model={custom_model_info is not None}")
+        if custom_model_info is not None:
+            logger.info("Skipping profile run for custom model - custom models manage their own memory")
+            # Still need to do a minimal forward pass for memory profiling context
+            # Just allocate a tiny dummy tensor to satisfy the profiling
+            dummy = torch.zeros(1, device=self.device, dtype=self.dtype)
+            del dummy
+            torch.cuda.synchronize()
+            return
+        logger.info("DEBUG: Proceeding with normal profile_run (no custom model detected)")
+
         # Profile with multimodal encoder & encoder cache.
         if self.supports_mm_inputs:
             if self.model_config.multimodal_config.skip_mm_profiling:

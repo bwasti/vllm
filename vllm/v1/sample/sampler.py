@@ -60,9 +60,14 @@ class Sampler(nn.Module):
 
     def __init__(self, logprobs_mode: LogprobsMode = "raw_logprobs"):
         super().__init__()
+        from vllm.logger import init_logger
+        logger = init_logger(__name__)
+        logger.info("DEBUG: Sampler.__init__ about to create TopKTopPSampler")
         self.topk_topp_sampler = TopKTopPSampler(logprobs_mode)
+        logger.info("DEBUG: Sampler.__init__ TopKTopPSampler created successfully")
         self.pin_memory = is_pin_memory_available()
         self.logprobs_mode = logprobs_mode
+        logger.info("DEBUG: Sampler.__init__ completed successfully")
 
     def forward(
         self,

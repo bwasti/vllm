@@ -1,0 +1,44 @@
+# RL Training Configuration
+# This file contains all hyperparameters for GRPO training with TorchTitan + vLLM
+
+# Model configuration
+model_path: "meta-llama/Llama-3.2-1B"
+tensor_parallel_size: 1
+max_model_len: 2048
+dtype: "float16"
+use_v2: true
+enable_torchtitan: true
+
+# Generation configuration
+max_tokens: 128
+temperature: 1.0
+top_p: 1.0
+
+# Training configuration
+training:
+  learning_rate: 1.0e-6
+  weight_decay: 0.01
+  max_grad_norm: 1.0
+  warmup_steps: 10
+
+# GRPO algorithm configuration
+grpo:
+  kl_coef: 0.1           # Coefficient for KL divergence penalty
+  clip_range: 0.2        # PPO-style clipping range
+  normalize_advantages: true
+  baseline: "mean"       # "mean" or "median"
+
+# Training loop configuration
+num_iterations: 100
+rollouts_per_iteration: 16
+train_steps_per_rollout: 1
+save_every: 10
+checkpoint_dir: "./checkpoints"
+
+# Distributed training
+distributed: false
+use_fsdp: true
+
+# Logging
+log_every: 10
+wandb_project: null    # Set to enable Weights & Biases logging

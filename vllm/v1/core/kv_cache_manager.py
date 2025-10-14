@@ -111,25 +111,31 @@ class KVCacheManager:
 
         self.block_size: int | None = None
         if self.enable_caching:
-            assert (
-                len(
-                    set(
-                        g.kv_cache_spec.block_size
-                        for g in kv_cache_config.kv_cache_groups
+            # Handle custom models that don't use vLLM's KV cache system
+            if len(kv_cache_config.kv_cache_groups) == 0:
+                logger.info("No KV cache groups found - likely using a custom model that manages its own KV cache")
+                # Disable caching for custom models that manage their own attention
+                self.enable_caching = False
+            else:
+                assert (
+                    len(
+                        set(
+                            g.kv_cache_spec.block_size
+                            for g in kv_cache_config.kv_cache_groups
+                        )
                     )
-                )
-                == 1
-            ), "Only one block size is supported for now"
-            self.block_size = kv_cache_config.kv_cache_groups[
-                0
-            ].kv_cache_spec.block_size
+                    == 1
+                ), "Only one block size is supported for now"
+                self.block_size = kv_cache_config.kv_cache_groups[
+                    0
+                ].kv_cache_spec.block_size
 
-            if dcp_world_size > 1:
-                assert len(kv_cache_config.kv_cache_groups) == 1
-                # Note(hc): need revisit. When both DCP and any future
-                # PCP are enabled, the block_size may need to be scaled
-                # by a factor of dcp_size × pcp_size?
-                self.block_size *= dcp_world_size
+                if dcp_world_size > 1:
+                    assert len(kv_cache_config.kv_cache_groups) == 1
+                    # Note(hc): need revisit. When both DCP and any future
+                    # PCP are enabled, the block_size may need to be scaled
+                    # by a factor of dcp_size × pcp_size?
+                    self.block_size *= dcp_world_size
 
         self.coordinator = get_kv_cache_coordinator(
             kv_cache_config=kv_cache_config,
