@@ -132,6 +132,11 @@ class ModelRunnerOutput:
     # req_id -> num_nans_in_logits
     num_nans_in_logits: dict[str, int] | None = None
 
+    # Auxiliary hidden states for EAGLE3 training data collection
+    # List of tensors containing intermediate hidden states from specified layers
+    # Only populated when VLLM_ENABLE_EAGLE3_DATA_COLLECTION is set
+    aux_hidden_states: list[torch.Tensor] | None = None
+
 
 # ModelRunnerOutput wrapper for async scheduling.
 class AsyncModelRunnerOutput(ABC):

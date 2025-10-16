@@ -101,6 +101,9 @@ if TYPE_CHECKING:
     VLLM_SKIP_P2P_CHECK: bool = False
     VLLM_DISABLED_KERNELS: list[str] = []
     VLLM_DISABLE_PYNCCL: bool = False
+    VLLM_ENABLE_EAGLE3_DATA_COLLECTION: bool = False
+    VLLM_EAGLE3_DATA_COLLECTION_DIR: str | None = None
+    VLLM_EAGLE3_DATA_COLLECTION_TOPK: int = 0
     VLLM_USE_V1: bool = True
     VLLM_ROCM_USE_AITER: bool = False
     VLLM_ROCM_USE_AITER_PAGED_ATTN: bool = False
@@ -857,6 +860,23 @@ environment_variables: dict[str, Callable[[], Any]] = {
     # Disable pynccl (using torch.distributed instead)
     "VLLM_DISABLE_PYNCCL": lambda: (
         os.getenv("VLLM_DISABLE_PYNCCL", "False").lower() in ("true", "1")
+    ),
+    # Enable collection of auxiliary hidden states for EAGLE3 training data
+    # even when EAGLE3 inference is not active
+    "VLLM_ENABLE_EAGLE3_DATA_COLLECTION": lambda: bool(
+        int(os.getenv("VLLM_ENABLE_EAGLE3_DATA_COLLECTION", "0"))
+    ),
+    # Directory path where EAGLE3 training data should be saved
+    # Defaults to "./eagle3_training_data" if not set
+    "VLLM_EAGLE3_DATA_COLLECTION_DIR": lambda: os.getenv(
+        "VLLM_EAGLE3_DATA_COLLECTION_DIR", None
+    ),
+    # Number of top-k logits to store for EAGLE3 data collection
+    # If set to 0 (default), all logits are stored
+    # If set to a positive value (e.g., 256), only the top-k logits and
+    # their indices are stored to save disk space
+    "VLLM_EAGLE3_DATA_COLLECTION_TOPK": lambda: int(
+        os.getenv("VLLM_EAGLE3_DATA_COLLECTION_TOPK", "0")
     ),
     # If set, use the V1 code path.
     "VLLM_USE_V1": lambda: bool(int(os.getenv("VLLM_USE_V1", "1"))),

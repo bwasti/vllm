@@ -310,6 +310,10 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
         self.encoder_cache: dict[str, torch.Tensor] = {}
 
         self.use_aux_hidden_state_outputs = False
+        # Enable aux_hidden_state_outputs for EAGLE3 data collection
+        # even when EAGLE3 inference is not active
+        self.enable_eagle3_data_collection = envs.VLLM_ENABLE_EAGLE3_DATA_COLLECTION
+
         # Set up speculative decoding.
         # NOTE(Jiayi): currently we put the entire draft model on
         # the last PP rank. This is not ideal if there are many
@@ -331,6 +335,10 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
                     f"{self.speculative_config.method}"
                 )
             self.rejection_sampler = RejectionSampler()
+
+        # Enable aux_hidden_state_outputs for data collection if requested
+        if self.enable_eagle3_data_collection:
+            self.use_aux_hidden_state_outputs = True
 
         # Request states.
         self.requests: dict[str, CachedRequestState] = {}
@@ -2517,6 +2525,16 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
                 hidden_states = model_output
                 aux_hidden_states = None
 
+            # Save aux_hidden_states for EAGLE3 training data collection
+            if self.enable_eagle3_data_collection and aux_hidden_states is not None:
+                self._save_aux_hidden_states_for_eagle3(
+                    aux_hidden_states,
+                    scheduler_output,
+                    num_scheduled_tokens,
+                    hidden_states,
+                    logits_indices,
+                )
+
             if not self.broadcast_pp_output:
                 # Common case.
                 if not get_pp_group().is_last_rank:
@@ -2650,6 +2668,7 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
             pooler_output=[],
             kv_connector_output=kv_connector_output,
             num_nans_in_logits=num_nans_in_logits,
+            aux_hidden_states=aux_hidden_states,
         )
 
         if not self.use_async_scheduling:
@@ -2977,6 +2996,140 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
             return tuple(layer_ids)
 
         return None
+
+    def _save_aux_hidden_states_for_eagle3(
+        self,
+        aux_hidden_states: list[torch.Tensor],
+        scheduler_output: "SchedulerOutput",
+        num_scheduled_tokens: int,
+        hidden_states: torch.Tensor,
+        logits_indices: torch.Tensor,
+    ) -> None:
+        """Save auxiliary hidden states for EAGLE3 training data collection.
+
+        This method saves the auxiliary hidden states from the base model to disk,
+        which can be used later to train an EAGLE3 drafter model. The hidden states
+        are organized by request ID and saved with metadata for reconstruction.
+
+        Args:
+            aux_hidden_states: List of hidden state tensors from auxiliary layers
+            scheduler_output: Scheduler output containing request information
+            num_scheduled_tokens: Number of tokens processed in this batch
+            hidden_states: Full hidden states tensor for computing logits
+            logits_indices: Indices for extracting logits
+        """
+        import os
+        from pathlib import Path
+
+        # Get top-k configuration and TP info
+        topk = envs.VLLM_EAGLE3_DATA_COLLECTION_TOPK
+        tp_rank = get_tp_group().rank
+        tp_size = get_tp_group().world_size
+
+        # Compute logits for all tokens at once
+        # Use the logits_indices to get the relevant hidden states
+        sample_hidden_states = hidden_states[logits_indices]
+        logits = self.model.compute_logits(sample_hidden_states)
+
+        # Process logits based on top-k configuration
+        if topk > 0:
+            # Store only top-k logits and their indices
+            topk_values, topk_indices = torch.topk(logits, k=topk, dim=-1)
+            logits_data = {
+                "topk_values": topk_values.cpu(),
+                "topk_indices": topk_indices.cpu(),
+            }
+        else:
+            # Store all logits
+            # When TP > 1, compute_logits returns sharded logits (vocab_size/tp_size per rank)
+            # We need to gather across all TP ranks to get the full vocabulary logits
+            if tp_size > 1:
+                # All ranks must participate in the collective operation
+                logits_list = [torch.empty_like(logits) for _ in range(tp_size)]
+                torch.distributed.all_gather(logits_list, logits, group=get_tp_group().device_group)
+                # Concatenate along vocabulary dimension to get full logits
+                logits = torch.cat(logits_list, dim=-1)
+
+            logits_data = {"logits": logits.cpu()}
+
+        # Only write from TP rank 1 to avoid redundant writes in distributed training
+        if tp_rank != 1:
+            return
+
+        # Create output directory if it doesn't exist
+        output_dir = envs.VLLM_EAGLE3_DATA_COLLECTION_DIR
+        if not output_dir:
+            output_dir = "./eagle3_training_data"
+
+        output_path = Path(output_dir)
+        output_path.mkdir(parents=True, exist_ok=True)
+
+        # Concatenate auxiliary hidden states along the feature dimension
+        # aux_hidden_states is a list of tensors, one per auxiliary layer
+        # Shape: [num_tokens, total_hidden_dim]
+        concat_hidden_states = torch.cat(
+            [h[:num_scheduled_tokens] for h in aux_hidden_states], dim=-1
+        )
+
+        # Move to CPU to avoid GPU memory issues
+        concat_hidden_states_cpu = concat_hidden_states.cpu()
+
+        # Save data for each request in the batch
+        req_start_idx = 0
+        logits_idx = 0
+        for req_id in self.input_batch.req_ids:
+            num_tokens_for_req = scheduler_output.num_scheduled_tokens[req_id]
+            req_state = self.requests[req_id]
+
+            # Extract hidden states for this request
+            req_hidden_states = concat_hidden_states_cpu[
+                req_start_idx : req_start_idx + num_tokens_for_req
+            ]
+
+            # Extract input tokens for this request
+            req_input_tokens = self.input_ids.gpu[
+                req_start_idx : req_start_idx + num_tokens_for_req
+            ].cpu().tolist()
+
+            # Extract logits for this request (one logit per request typically)
+            if topk > 0:
+                req_logits_data = {
+                    "topk_values": logits_data["topk_values"][logits_idx:logits_idx + 1],
+                    "topk_indices": logits_data["topk_indices"][logits_idx:logits_idx + 1],
+                    "topk": topk,
+                }
+            else:
+                req_logits_data = {
+                    "logits": logits_data["logits"][logits_idx:logits_idx + 1],
+                }
+            logits_idx += 1
+
+            # Create a unique filename using request ID and timestamp
+            import time
+            timestamp = int(time.time() * 1000000)  # microsecond precision
+            filename = output_path / f"aux_hidden_states_{req_id}_{timestamp}.pt"
+
+            # Save the data with metadata, including input tokens and logits
+            save_data = {
+                "hidden_states": req_hidden_states,
+                "input_token_ids": req_input_tokens,  # Input tokens that were processed
+                **req_logits_data,  # Next-token predictions (full or top-k)
+                "req_id": req_id,
+                "num_computed_tokens": req_state.num_computed_tokens,
+                "num_scheduled_tokens": num_tokens_for_req,
+                "timestamp": timestamp,
+            }
+
+            torch.save(save_data, filename)
+            req_start_idx += num_tokens_for_req
+
+        logger.debug(
+            "Saved auxiliary hidden states for %d requests to %s (TP rank %d, top-k=%d)",
+            len(self.input_batch.req_ids),
+            output_dir,
+            tp_rank,
+            topk,
+        )
 
     def reload_weights(self) -> None:
         assert getattr(self, "model", None) is not None, (
