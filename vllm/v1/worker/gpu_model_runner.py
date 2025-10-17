@@ -3018,7 +3018,6 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
             hidden_states: Full hidden states tensor for computing logits
             logits_indices: Indices for extracting logits
         """
-        import os
         from pathlib import Path
 
         # Get top-k configuration and TP info
@@ -3046,7 +3045,9 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
             if tp_size > 1:
                 # All ranks must participate in the collective operation
                 logits_list = [torch.empty_like(logits) for _ in range(tp_size)]
-                torch.distributed.all_gather(logits_list, logits, group=get_tp_group().device_group)
+                torch.distributed.all_gather(
+                    logits_list, logits, group=get_tp_group().device_group
+                )
                 # Concatenate along vocabulary dimension to get full logits
                 logits = torch.cat(logits_list, dim=-1)
 
@@ -3087,25 +3088,32 @@ class GPUModelRunner(LoRAModelRunnerMixin, KVConnectorModelRunnerMixin):
             ]
 
             # Extract input tokens for this request
-            req_input_tokens = self.input_ids.gpu[
-                req_start_idx : req_start_idx + num_tokens_for_req
-            ].cpu().tolist()
+            req_input_tokens = (
+                self.input_ids.gpu[req_start_idx : req_start_idx + num_tokens_for_req]
+                .cpu()
+                .tolist()
+            )
 
             # Extract logits for this request (one logit per request typically)
             if topk > 0:
                 req_logits_data = {
-                    "topk_values": logits_data["topk_values"][logits_idx:logits_idx + 1],
-                    "topk_indices": logits_data["topk_indices"][logits_idx:logits_idx + 1],
+                    "topk_values": logits_data["topk_values"][
+                        logits_idx : logits_idx + 1
+                    ],
+                    "topk_indices": logits_data["topk_indices"][
+                        logits_idx : logits_idx + 1
+                    ],
                     "topk": topk,
                 }
             else:
                 req_logits_data = {
-                    "logits": logits_data["logits"][logits_idx:logits_idx + 1],
+                    "logits": logits_data["logits"][logits_idx : logits_idx + 1],
                 }
             logits_idx += 1
 
             # Create a unique filename using request ID and timestamp
             import time
+
             timestamp = int(time.time() * 1000000)  # microsecond precision
             filename = output_path / f"aux_hidden_states_{req_id}_{timestamp}.pt"
 

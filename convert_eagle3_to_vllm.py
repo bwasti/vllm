@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """
 Convert trained EAGLE3 model to vLLM-compatible format.
 
@@ -18,8 +20,9 @@ Usage:
 
 import argparse
 import json
-import torch
 from pathlib import Path
+
+import torch
 from safetensors.torch import save_file
 
 
@@ -44,7 +47,7 @@ def convert_model(input_dir: Path, output_dir: Path):
     q_size = num_heads * head_dim
     kv_size = num_kv_heads * head_dim
 
-    print(f"\nModel architecture:")
+    print("\nModel architecture:")
     print(f"  hidden_size: {hidden_size}")
     print(f"  num_heads: {num_heads}, num_kv_heads: {num_kv_heads}")
     print(f"  head_dim: {head_dim}")
@@ -146,18 +149,26 @@ def convert_model(input_dir: Path, output_dir: Path):
     with open(output_dir / "config.json", "w") as f:
         json.dump(vllm_config, f, indent=2)
 
-    print(f"\n✅ Model converted successfully!")
+    print("\n✅ Model converted successfully!")
     print(f"   Output: {output_dir}")
-    print(f"   Files:")
-    print(f"     - model.safetensors ({(output_dir / 'model.safetensors').stat().st_size / 1e9:.2f}GB)")
-    print(f"     - pytorch_model.bin ({(output_dir / 'pytorch_model.bin').stat().st_size / 1e9:.2f}GB)")
-    print(f"     - config.json")
+    print("   Files:")
+    print(
+        f"     - model.safetensors ({(output_dir / 'model.safetensors').stat().st_size / 1e9:.2f}GB)"
+    )
+    print(
+        f"     - pytorch_model.bin ({(output_dir / 'pytorch_model.bin').stat().st_size / 1e9:.2f}GB)"
+    )
+    print("     - config.json")
 
 
 def main():
     parser = argparse.ArgumentParser(description="Convert EAGLE3 model to vLLM format")
-    parser.add_argument("--input-dir", type=str, required=True, help="Input model directory")
-    parser.add_argument("--output-dir", type=str, required=True, help="Output model directory")
+    parser.add_argument(
+        "--input-dir", type=str, required=True, help="Input model directory"
+    )
+    parser.add_argument(
+        "--output-dir", type=str, required=True, help="Output model directory"
+    )
     args = parser.parse_args()
 
     convert_model(Path(args.input_dir), Path(args.output_dir))

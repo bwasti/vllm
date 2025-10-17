@@ -219,7 +219,9 @@ class EagleProposer:
             last_token_indices = common_attn_metadata.query_start_loc[1:] - 1
 
         if self.method == "eagle3":
-            assert isinstance(self.model, (Eagle3LlamaForCausalLM, Eagle3Qwen3ForCausalLM))
+            assert isinstance(
+                self.model, (Eagle3LlamaForCausalLM, Eagle3Qwen3ForCausalLM)
+            )
             target_hidden_states = self.model.combine_hidden_states(
                 target_hidden_states
             )
