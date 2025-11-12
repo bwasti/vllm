@@ -133,7 +133,9 @@ VLLM_CMD="python -m vllm.entrypoints.openai.api_server \
     --tensor-parallel-size $TP_SIZE \
     --host $HOST \
     --port $PORT \
-    --disable-log-requests"
+    --disable-log-requests \
+    --kv-cache-dtype auto \
+    --quantization compressed-tensors"
 
 # Add online training flag if mode is online_eagle
 if [[ "$MODE" == "online_eagle" ]]; then
