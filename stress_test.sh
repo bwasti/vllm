@@ -20,7 +20,7 @@ set -e
 
 # Default configuration
 WORKLOAD="chat"
-HOST="localhost"
+HOST="127.0.0.1"
 PORT=8000
 NUM_REQUESTS=100
 QPS=10
