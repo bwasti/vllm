@@ -165,13 +165,13 @@ MAX_RETRIES=60
 RETRY_COUNT=0
 
 while [[ $RETRY_COUNT -lt $MAX_RETRIES ]]; do
-    if curl -s "http://$HOST:$PORT/health" > /dev/null 2>&1; then
+    if curl -s -4 "http://127.0.0.1:$PORT/health" > /dev/null 2>&1; then
         echo "✓ Server is ready!"
         echo ""
         echo "Server endpoints:"
-        echo "  Health:  http://$HOST:$PORT/health"
-        echo "  Models:  http://$HOST:$PORT/v1/models"
-        echo "  Chat:    http://$HOST:$PORT/v1/chat/completions"
+        echo "  Health:  http://127.0.0.1:$PORT/health"
+        echo "  Models:  http://127.0.0.1:$PORT/v1/models"
+        echo "  Chat:    http://127.0.0.1:$PORT/v1/chat/completions"
         echo ""
         echo "To stop the server, run: kill $SERVER_PID"
         echo ""
