@@ -19,7 +19,12 @@ from contextlib import asynccontextmanager
 from http import HTTPStatus
 from typing import Annotated, Any, Literal
 
-import model_hosting_container_standards.sagemaker as sagemaker_standards
+try:
+    import model_hosting_container_standards.sagemaker as sagemaker_standards
+
+    HAS_SAGEMAKER_STANDARDS = True
+except ImportError:
+    HAS_SAGEMAKER_STANDARDS = False
 import prometheus_client
 import pydantic
 import regex as re
@@ -1628,7 +1633,8 @@ def build_app(args: Namespace) -> FastAPI:
                 f"Invalid middleware {middleware}. Must be a function or a class."
             )
 
-    app = sagemaker_standards.bootstrap(app)
+    if HAS_SAGEMAKER_STANDARDS:
+        app = sagemaker_standards.bootstrap(app)
 
     return app
 
