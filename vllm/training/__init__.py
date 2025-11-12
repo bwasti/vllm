@@ -8,8 +8,12 @@ starting with EAGLE speculative decoding models.
 """
 
 from vllm.training.config import OnlineTrainingMetrics, TrainingConfig
+from vllm.training.eagle_trainer import EagleTrainer
+from vllm.training.training_manager import TrainingManager
 
 __all__ = [
     "TrainingConfig",
     "OnlineTrainingMetrics",
+    "EagleTrainer",
+    "TrainingManager",
 ]
