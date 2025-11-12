@@ -180,6 +180,26 @@ class StressTest:
         self.temperature = temperature
         self.metrics: List[RequestMetrics] = []
         self.prompts: List[str] = []
+        self.model = None  # Will be detected
+
+    async def detect_model(self):
+        """Detect the available model name from the server."""
+        import aiohttp
+        try:
+            async with aiohttp.ClientSession() as session:
+                async with session.get(f"{self.base_url}/v1/models") as response:
+                    if response.status == 200:
+                        data = await response.json()
+                        if data.get("data") and len(data["data"]) > 0:
+                            self.model = data["data"][0]["id"]
+                            print(f"✓ Detected model: {self.model}")
+                            return
+        except Exception as e:
+            print(f"Warning: Could not detect model name ({e})")
+
+        # Fallback to "default"
+        self.model = "default"
+        print(f"Using default model name: {self.model}")
 
     async def load_prompts(self, dataset: Optional[str] = None, num_prompts: int = 1000):
         """Load prompts from HuggingFace dataset or use defaults."""
@@ -269,7 +289,7 @@ class StressTest:
         start_time = time.time()
 
         payload = {
-            "model": "default",
+            "model": self.model,
             "messages": [{"role": "user", "content": prompt}],
             "max_tokens": self.max_tokens,
             "temperature": self.temperature,
@@ -491,6 +511,9 @@ async def main():
         max_tokens=args.max_tokens,
         temperature=args.temperature
     )
+
+    # Detect model name
+    await test.detect_model()
 
     # Load prompts
     max_prompts = args.duration * int(args.qps) if args.duration else args.num_requests
