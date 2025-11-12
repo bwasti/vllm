@@ -48,20 +48,20 @@ class TrainingConfig:
     """Type of LR scheduler: 'cosine', 'linear', or 'constant'."""
 
     # --- Training Batch Configuration ---
-    batch_size: int = 4
+    batch_size: int = 2
     """Batch size for training (number of sequences per batch)."""
 
     gradient_accumulation_steps: int = 1
     """Number of gradient accumulation steps before optimizer step."""
 
-    max_seq_len: int = 512
+    max_seq_len: int = 256
     """Maximum sequence length for training samples."""
 
     # --- Data Collection ---
-    buffer_size: int = 1000
+    buffer_size: int = 100
     """Size of the training data buffer (number of samples)."""
 
-    min_samples_for_training: int = 16
+    min_samples_for_training: int = 8
     """Minimum number of samples required before starting training."""
 
     sample_collection_prob: float = 1.0

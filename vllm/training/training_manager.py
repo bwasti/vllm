@@ -12,6 +12,7 @@ This module coordinates the entire online training pipeline:
 """
 
 import asyncio
+import logging
 from typing import TYPE_CHECKING
 
 import torch
@@ -164,43 +165,79 @@ class TrainingManager:
                 self.total_rejected_tokens += num_rejected
                 self.total_accepted_tokens += num_accepted
 
-                # Only collect samples for rejected tokens
-                if num_rejected == 0:
-                    continue
+                # Log acceptance rate
+                acceptance_pct = 100.0 * num_accepted / num_drafts
+                logger.info_once(
+                    "EAGLE acceptance: accepted=%d/%d (%.1f%%), rejected=%d",
+                    num_accepted,
+                    num_drafts,
+                    acceptance_pct,
+                    num_rejected,
+                )
 
-                # Get rejected token indices within this request's draft tokens
-                rejected_indices = torch.where(rejected_mask)[0]
+                # Collect training samples from ALL tokens (both accepted and rejected)
+                # This provides more training data and faster buffer filling
+                # For accepted tokens: reinforce good predictions
+                # For rejected tokens: learn from mistakes
 
-                # For each rejected token, create a training sample
-                for local_idx in rejected_indices:
+                # For each draft token, create a training sample
+                for local_idx in range(num_drafts):
                     # Global index in flattened tensors
-                    global_idx = start_idx + local_idx.item()
+                    global_idx = start_idx + local_idx
 
-                    # Create training sample
-                    # Input: EAGLE was given target_token_ids[global_idx]
-                    # and target_hidden_states[global_idx]
-                    # Output: EAGLE predicted req_draft_tokens[local_idx]
-                    # Label: Ground truth is the next token that should
-                    # have been predicted
-                    # (For simplicity, we use the target token at the
-                    # next position)
+                    # Determine the label based on whether token was accepted
+                    # If accepted: use the sampled token (what worked)
+                    # If rejected: use the correct token that should have been predicted
+                    if rejected_mask[local_idx]:
+                        # Rejected: we want to learn the correct prediction
+                        # Use the next token from target as the label
+                        label_token = next_token_ids[req_idx].item()
+                    else:
+                        # Accepted: reinforce this prediction
+                        label_token = req_draft_tokens[local_idx].item()
+
+                    # Extract tensors for this sample
+                    input_ids_slice = target_token_ids[global_idx : global_idx + 1]
+                    positions_slice = target_positions[global_idx : global_idx + 1]
+                    hidden_states_slice = target_hidden_states[
+                        global_idx : global_idx + 1
+                    ]
+                    label_tensor = torch.tensor(
+                        [label_token],
+                        device=target_token_ids.device,
+                        dtype=torch.long,
+                    )
+
+                    # Debug: Log shapes for first sample
+                    if local_idx == 0 and logger.isEnabledFor(logging.DEBUG):
+                        logger.debug(
+                            "Creating TrainingSample: "
+                            "input_ids shape=%s, "
+                            "positions shape=%s, "
+                            "hidden_states shape=%s, "
+                            "labels shape=%s",
+                            input_ids_slice.shape,
+                            positions_slice.shape,
+                            hidden_states_slice.shape,
+                            label_tensor.shape,
+                        )
 
                     sample = TrainingSample(
-                        input_ids=target_token_ids[global_idx : global_idx + 1],
-                        positions=target_positions[global_idx : global_idx + 1],
-                        hidden_states=target_hidden_states[global_idx : global_idx + 1],
-                        # Label is the token that should have been predicted
-                        # We use the draft token ID here, but the model should
-                        # learn to predict what the target model would predict
-                        labels=torch.tensor(
-                            [req_draft_tokens[local_idx].item()],
-                            device=target_token_ids.device,
-                            dtype=torch.long,
-                        ),
+                        input_ids=input_ids_slice,
+                        positions=positions_slice,
+                        hidden_states=hidden_states_slice,
+                        labels=label_tensor,
                     )
 
                     await self.trainer.add_training_sample(sample)
                     self.total_samples_collected += 1
+
+                # Log once per worker
+                logger.info_once(
+                    "Collected %d training samples (buffer size: %d)",
+                    num_drafts,
+                    len(self.trainer.buffer),
+                )
 
             # Update metrics
             self.metrics.total_samples_collected = self.total_samples_collected
@@ -236,7 +273,7 @@ class TrainingManager:
 
         # Check if trainer says we're ready
         if not self.trainer.should_train():
-            logger.debug(
+            logger.info_once(
                 "Training conditions not met: buffer_size=%d, "
                 "min_samples=%d, is_training=%s",
                 len(self.trainer.buffer),

@@ -14,10 +14,43 @@
 
 set -e  # Exit on error
 
+# Cleanup function for graceful shutdown
+cleanup() {
+    if [[ -n "${SERVER_PID:-}" ]]; then
+        echo ""
+        echo "Cleaning up server (PID: $SERVER_PID) and its children..."
+
+        # Kill the entire process group (parent + all children)
+        # Using negative PID kills the process group
+        kill -- -$SERVER_PID 2>/dev/null || true
+
+        # Wait up to 5 seconds for graceful shutdown
+        for i in {1..5}; do
+            if ! ps -p $SERVER_PID > /dev/null 2>&1; then
+                echo "✓ Server stopped gracefully"
+                return
+            fi
+            sleep 1
+        done
+
+        # Force kill the process group if still running
+        if ps -p $SERVER_PID > /dev/null 2>&1; then
+            echo "Force killing server process group..."
+            kill -9 -- -$SERVER_PID 2>/dev/null || true
+            sleep 1
+        fi
+
+        echo "✓ Cleanup complete"
+    fi
+}
+
+# Set up trap to cleanup on exit
+trap cleanup EXIT INT TERM
+
 # Default configuration
 MODE="eagle"
 PORT=8000
-TP_SIZE=1
+TP_SIZE=8
 HOST="0.0.0.0"
 NUM_SPEC_TOKENS=4
 MODEL_PATH="/data/users/bwasti/wearable_maverick_vllm/"
@@ -100,8 +133,18 @@ fi
 export LD_PRELOAD="/usr/local/fbcode/platform010/lib/libcublasLt.so:/usr/local/fbcode/platform010/lib/libcublas.so"
 export VLLM_ATTENTION_BACKEND="FLASHINFER"
 
+# Enable online training if mode is online_eagle
+if [[ "$MODE" == "online_eagle" ]]; then
+    export VLLM_ENABLE_ONLINE_TRAINING=true
+    echo "Online training enabled via VLLM_ENABLE_ONLINE_TRAINING=true"
+    # Use "eagle" method for now (online_eagle support comes in Phase 3)
+    SPEC_METHOD="eagle"
+else
+    SPEC_METHOD="$MODE"
+fi
+
 # Build speculative config
-SPEC_CONFIG="{\"model\": \"$DRAFT_PATH\", \"method\": \"$MODE\", \"num_speculative_tokens\": $NUM_SPEC_TOKENS"
+SPEC_CONFIG="{\"model\": \"$DRAFT_PATH\", \"method\": \"$SPEC_METHOD\", \"num_speculative_tokens\": $NUM_SPEC_TOKENS"
 
 # Add training config if provided and mode is online_eagle
 if [[ "$MODE" == "online_eagle" && -n "$TRAINING_CONFIG" ]]; then
@@ -136,16 +179,13 @@ VLLM_CMD="python -m vllm.entrypoints.openai.api_server \
     --port $PORT \
     --disable-log-requests \
     --kv-cache-dtype auto \
-    --quantization compressed-tensors \
-    --gpu-memory-utilization 0.85 \
-    --max-model-len 8192 \
-    --max-num-seqs 128"
+    --gpu-memory-utilization 0.7 \
+    --max-model-len 1536 \
+    --max-num-seqs 12"
 
 # Add online training flag if mode is online_eagle
 if [[ "$MODE" == "online_eagle" ]]; then
-    # Note: This flag doesn't exist yet, will be added in Phase 3
-    # VLLM_CMD="$VLLM_CMD --enable-online-training"
-    echo "Note: Online training mode will be enabled once implemented (Phase 3)"
+    echo "Note: Online training will be enabled via VLLM_ENABLE_ONLINE_TRAINING env var"
 fi
 
 echo "Starting vLLM server..."
@@ -161,7 +201,7 @@ echo ""
 
 # Wait for server to be ready
 echo "Waiting for server to be ready..."
-MAX_RETRIES=60
+MAX_RETRIES=300
 RETRY_COUNT=0
 
 while [[ $RETRY_COUNT -lt $MAX_RETRIES ]]; do
@@ -183,6 +223,7 @@ while [[ $RETRY_COUNT -lt $MAX_RETRIES ]]; do
 
     # Check if server process is still running
     if ! ps -p $SERVER_PID > /dev/null 2>&1; then
+        echo ""
         echo "✗ Server process died unexpectedly"
         exit 1
     fi
@@ -193,6 +234,6 @@ while [[ $RETRY_COUNT -lt $MAX_RETRIES ]]; do
 done
 
 echo ""
-echo "✗ Server failed to start within timeout"
-kill $SERVER_PID 2>/dev/null || true
+echo "✗ Server failed to start within timeout (waited $((MAX_RETRIES * 2)) seconds)"
+echo "Check the logs above for errors. The server will be stopped."
 exit 1

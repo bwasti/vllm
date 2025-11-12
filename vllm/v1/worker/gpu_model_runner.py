@@ -3036,13 +3036,14 @@ class GPUModelRunner(
                 and spec_decode_metadata is not None
                 and isinstance(sampled_token_ids, torch.Tensor)
             ):
-                # Fire-and-forget: collect training data in background
-                # without blocking inference
+                logger.info_once("Training data collection triggered!")
+                # Run data collection synchronously for now
+                # TODO: Optimize with proper async event loop later
                 import asyncio
 
                 try:
-                    loop = asyncio.get_event_loop()
-                    loop.create_task(
+                    # Run the async function synchronously
+                    asyncio.run(
                         self.training_manager.collect_training_data(
                             target_token_ids=target_token_ids,
                             target_positions=target_positions,
@@ -3053,11 +3054,19 @@ class GPUModelRunner(
                             spec_decode_metadata=spec_decode_metadata,
                         )
                     )
-                    # Also trigger training check
-                    loop.create_task(self.training_manager.maybe_trigger_training())
-                except RuntimeError:
-                    # No event loop running - skip training data collection
-                    logger.debug("Skipping training data collection: no event loop")
+                    # Also check if training should be triggered
+                    asyncio.run(self.training_manager.maybe_trigger_training())
+                except Exception as e:
+                    logger.warning("Training data collection failed: %s", e)
+            elif self.training_manager is not None:
+                # Debug: log why training wasn't triggered
+                logger.info_once(
+                    "Training data NOT collected: "
+                    "spec_decode_metadata=%s, "
+                    "sampled_token_ids_is_tensor=%s",
+                    spec_decode_metadata is not None,
+                    isinstance(sampled_token_ids, torch.Tensor),
+                )
 
         return draft_token_ids
 

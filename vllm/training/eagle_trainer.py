@@ -132,11 +132,65 @@ def collate_training_samples(samples: list[TrainingSample]) -> dict[str, torch.T
     if not samples:
         raise ValueError("Cannot collate empty sample list")
 
-    # Stack all tensors
-    input_ids = torch.stack([s.input_ids for s in samples])
-    positions = torch.stack([s.positions for s in samples])
-    hidden_states = torch.stack([s.hidden_states for s in samples])
-    labels = torch.stack([s.labels for s in samples])
+    # Debug: Check tensor shapes and types
+    logger.debug("Collating %d samples", len(samples))
+    for i, s in enumerate(samples[:2]):  # Log first 2 samples
+        input_shape = s.input_ids.shape if hasattr(s.input_ids, "shape") else "N/A"
+        logger.debug(
+            "Sample %d: input_ids type=%s, shape=%s",
+            i,
+            type(s.input_ids),
+            input_shape,
+        )
+        pos_shape = s.positions.shape if hasattr(s.positions, "shape") else "N/A"
+        logger.debug(
+            "Sample %d: positions type=%s, shape=%s",
+            i,
+            type(s.positions),
+            pos_shape,
+        )
+        hidden_shape = (
+            s.hidden_states.shape if hasattr(s.hidden_states, "shape") else "N/A"
+        )
+        logger.debug(
+            "Sample %d: hidden_states type=%s, shape=%s",
+            i,
+            type(s.hidden_states),
+            hidden_shape,
+        )
+        label_shape = s.labels.shape if hasattr(s.labels, "shape") else "N/A"
+        logger.debug(
+            "Sample %d: labels type=%s, shape=%s",
+            i,
+            type(s.labels),
+            label_shape,
+        )
+
+    # Stack all tensors - need to squeeze to ensure consistent dimensions
+    try:
+        input_ids = torch.stack([s.input_ids.squeeze() for s in samples])
+        positions = torch.stack([s.positions.squeeze() for s in samples])
+        hidden_states = torch.stack([s.hidden_states for s in samples])
+        labels = torch.stack([s.labels.squeeze() for s in samples])
+    except Exception as e:
+        logger.error("Failed to stack tensors: %s", e)
+        logger.error(
+            "Tensor shapes: input_ids=%s",
+            [s.input_ids.shape for s in samples[:3]],
+        )
+        logger.error(
+            "Tensor shapes: positions=%s",
+            [s.positions.shape for s in samples[:3]],
+        )
+        logger.error(
+            "Tensor shapes: hidden_states=%s",
+            [s.hidden_states.shape for s in samples[:3]],
+        )
+        logger.error(
+            "Tensor shapes: labels=%s",
+            [s.labels.shape for s in samples[:3]],
+        )
+        raise
 
     return {
         "input_ids": input_ids,
