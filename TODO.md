@@ -221,7 +221,15 @@ This document outlines the plan to implement online trainable EAGLE in vLLM. The
 
 ---
 
-## Phase 2: High-Level Integration ⚙️ IN PROGRESS
+## Phase 2: High-Level Integration ✅ MOSTLY COMPLETE
+
+**Status:** Core integration complete! TrainingManager is fully integrated into GPUModelRunner.
+- Data collection hooks are in place
+- Async training triggers are implemented
+- Environment variable control is working
+- Ready for end-to-end testing
+
+**Remaining:** Integration tests (Phase 2.6) and proper config integration (deferred to Phase 3)
 
 ### 2.1 Training Data Buffer ✅ COMPLETE
 - [x] **TrainingBuffer implementation** (integrated in `vllm/training/eagle_trainer.py`)
@@ -275,30 +283,35 @@ This document outlines the plan to implement online trainable EAGLE in vLLM. The
 
 **Commit:** `4b236b802` - "[Training] Add TrainingManager for online EAGLE training"
 
-### 2.3 Integration Point: Worker Level 🔄 NEXT STEP
-- [ ] **Modify `vllm/v1/worker/gpu_model_runner.py`**
-  - [ ] Add `training_manager: Optional[TrainingManager]` field
-  - [ ] In `__init__`:
-    - [ ] Check if speculative_config has online training enabled
-    - [ ] Initialize TrainingManager if enabled (pass drafter model)
-  - [ ] In `sample_tokens()` after rejection sampling (~line 2762):
-    ```python
-    # After rejection sampling
-    sampler_output = self._sample(logits, spec_decode_metadata)
+### 2.3 Integration Point: Worker Level ✅ COMPLETE
+- [x] **Modified `vllm/v1/worker/gpu_model_runner.py`**
+  - [x] Added `training_manager: TrainingManager | None = None` field (line 380)
+  - [x] Added TYPE_CHECKING import for TrainingManager (line 164)
+  - [x] In `load_model()` after drafter loads (lines 3079-3103):
+    - [x] Check if EAGLE + VLLM_ENABLE_ONLINE_TRAINING
+    - [x] Create TrainingConfig (will get from spec config in Phase 3)
+    - [x] Initialize TrainingManager with vllm_config, training_config, drafter.model
+  - [x] In `propose_draft_token_ids()` after drafter.propose() (lines 3033-3060):
+    - [x] Check if training_manager is not None and spec_decode_metadata exists
+    - [x] Use asyncio.create_task() to run collect_training_data() in background
+    - [x] Use asyncio.create_task() to run maybe_trigger_training() in background
+    - [x] Graceful fallback if no event loop running
 
-    # NEW: Collect training data if training enabled
-    if self.training_manager is not None and spec_decode_metadata is not None:
-        await self.training_manager.collect_training_data(
-            target_token_ids=self.input_ids.gpu[token_indices],
-            target_positions=self._get_positions(token_indices),
-            target_hidden_states=hidden_states[token_indices],
-            draft_token_ids=self._draft_token_ids,
-            next_token_ids=next_token_ids,
-            sampled_token_ids=sampler_output.sampled_token_ids,
-            spec_decode_metadata=spec_decode_metadata,
-        )
-        await self.training_manager.maybe_trigger_training()
-    ```
+- [x] **Added `VLLM_ENABLE_ONLINE_TRAINING` environment variable**
+  - [x] Added to `vllm/envs.py` TYPE_CHECKING block (line 28)
+  - [x] Added to environment_variables dict (lines 535-540)
+  - [x] Defaults to False, set to "true" or "1" to enable
+
+**Implementation notes:**
+- Used fire-and-forget async tasks to avoid blocking inference
+- Training data collection runs in background without waiting for completion
+- Gracefully handles case where no event loop is running
+- Currently controlled via VLLM_ENABLE_ONLINE_TRAINING env var
+- Will be integrated with SpeculativeConfig in Phase 3
+
+**Files modified:**
+- `vllm/v1/worker/gpu_model_runner.py`: Added training_manager field, initialization, and data collection hook
+- `vllm/envs.py`: Added VLLM_ENABLE_ONLINE_TRAINING environment variable
 
 ### 2.4 Configuration Integration (deferred to Phase 3)
 - [ ] Add training config to SpeculativeConfig

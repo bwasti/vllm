@@ -25,6 +25,7 @@ if TYPE_CHECKING:
     VLLM_ENGINE_ITERATION_TIMEOUT_S: int = 60
     VLLM_API_KEY: str | None = None
     VLLM_DEBUG_LOG_API_SERVER_RESPONSE: bool = False
+    VLLM_ENABLE_ONLINE_TRAINING: bool = False
     S3_ACCESS_KEY_ID: str | None = None
     S3_SECRET_ACCESS_KEY: str | None = None
     S3_ENDPOINT_URL: str | None = None
@@ -530,6 +531,12 @@ environment_variables: dict[str, Callable[[], Any]] = {
     # when using the flash-attention backend.
     "VLLM_FLASH_ATTN_VERSION": lambda: maybe_convert_int(
         os.environ.get("VLLM_FLASH_ATTN_VERSION", None)
+    ),
+    # Enable online training for EAGLE speculative decoding
+    # When set to True, the EAGLE drafter model will be trained on-the-fly
+    # during inference to improve draft token acceptance rate
+    "VLLM_ENABLE_ONLINE_TRAINING": lambda: (
+        os.getenv("VLLM_ENABLE_ONLINE_TRAINING", "False").lower() in ("true", "1")
     ),
     # Feature flag to enable/disable Inductor standalone compile.
     # In torch <= 2.7 we ignore this flag; in torch >= 2.9 this is

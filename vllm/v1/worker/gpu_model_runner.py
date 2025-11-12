@@ -161,6 +161,7 @@ from .utils import (
 
 if TYPE_CHECKING:
     from vllm.model_executor.model_loader.tensorizer import TensorizerConfig
+    from vllm.training.training_manager import TrainingManager
     from vllm.v1.core.sched.output import GrammarOutput, SchedulerOutput
 
 logger = init_logger(__name__)
@@ -374,6 +375,9 @@ class GPUModelRunner(
                     f"{self.speculative_config.method}"
                 )
             self.rejection_sampler = RejectionSampler(self.sampler)
+
+        # Online training manager (initialized after model load)
+        self.training_manager: TrainingManager | None = None
 
         # Request states.
         self.requests: dict[str, CachedRequestState] = {}
@@ -3026,6 +3030,35 @@ class GPUModelRunner(
                 mm_embed_inputs=mm_embed_inputs,
             )
 
+            # Collect training data if online training is enabled
+            if (
+                self.training_manager is not None
+                and spec_decode_metadata is not None
+                and isinstance(sampled_token_ids, torch.Tensor)
+            ):
+                # Fire-and-forget: collect training data in background
+                # without blocking inference
+                import asyncio
+
+                try:
+                    loop = asyncio.get_event_loop()
+                    loop.create_task(
+                        self.training_manager.collect_training_data(
+                            target_token_ids=target_token_ids,
+                            target_positions=target_positions,
+                            target_hidden_states=target_hidden_states,
+                            draft_token_ids=draft_token_ids,
+                            next_token_ids=next_token_ids,
+                            sampled_token_ids=sampled_token_ids,
+                            spec_decode_metadata=spec_decode_metadata,
+                        )
+                    )
+                    # Also trigger training check
+                    loop.create_task(self.training_manager.maybe_trigger_training())
+                except RuntimeError:
+                    # No event loop running - skip training data collection
+                    logger.debug("Skipping training data collection: no event loop")
+
         return draft_token_ids
 
     def update_config(self, overrides: dict[str, Any]) -> None:
@@ -3071,6 +3104,33 @@ class GPUModelRunner(
             if hasattr(self, "drafter"):
                 logger.info_once("Loading drafter model...")
                 self.drafter.load_model(self.model)
+
+                # Initialize online training if enabled
+                if (
+                    self.speculative_config.use_eagle()
+                    and hasattr(self.drafter, "model")
+                    # TODO(Phase 3): Add proper config flag check
+                    # For now, controlled via environment variable
+                    and envs.VLLM_ENABLE_ONLINE_TRAINING
+                ):
+                    logger.info_once("Initializing online EAGLE training...")
+                    from vllm.training.config import TrainingConfig
+                    from vllm.training.training_manager import TrainingManager
+
+                    # TODO(Phase 3): Get training config from speculative_config
+                    training_config = TrainingConfig()
+                    self.training_manager = TrainingManager(
+                        vllm_config=self.vllm_config,
+                        training_config=training_config,
+                        inference_drafter=self.drafter.model,
+                    )
+                    logger.info_once(
+                        "Online training initialized: buffer_size=%d, "
+                        "train_interval=%d",
+                        training_config.buffer_size,
+                        training_config.train_interval_requests,
+                    )
+
                 if (
                     hasattr(self.drafter, "model")
                     and is_mixture_of_experts(self.drafter.model)
