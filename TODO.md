@@ -221,189 +221,100 @@ This document outlines the plan to implement online trainable EAGLE in vLLM. The
 
 ---
 
-## Phase 2: High-Level Integration
+## Phase 2: High-Level Integration ⚙️ IN PROGRESS
 
-### 2.1 Training Data Buffer
-- [ ] **Create `vllm/training/data_buffer.py`**
-  - [ ] Define `TrainingDataBuffer` class:
-    - [ ] Use circular buffer for memory efficiency
-    - [ ] Store tuples: `(input_ids, positions, hidden_states, labels)`
-    - [ ] Implement `add(input_ids, positions, hidden_states, labels)`:
-      - [ ] Add new sample to buffer
-      - [ ] Evict oldest if buffer full
-      - [ ] Handle batched additions efficiently
-    - [ ] Implement `sample_batch(batch_size)`:
-      - [ ] Sample random batch from buffer
-      - [ ] Return collated tensors ready for training
-      - [ ] Handle variable sequence lengths (padding)
-    - [ ] Implement `__len__()`: Return current buffer size
-    - [ ] Implement `clear()`: Empty buffer
-    - [ ] Thread-safe implementation (use locks for concurrent access)
+### 2.1 Training Data Buffer ✅ COMPLETE
+- [x] **TrainingBuffer implementation** (integrated in `vllm/training/eagle_trainer.py`)
+  - [x] Circular buffer using `deque(maxlen=buffer_size)`
+  - [x] Stores `TrainingSample` objects with:
+    - input_ids, positions, hidden_states, labels
+  - [x] Thread-safe with `asyncio.Lock()`
+  - [x] Random batch sampling via `get_batch(batch_size)`
+  - [x] PyTorch Dataset interface for DataLoader compatibility
+  - [x] Filtering logic: Rejection-based sampling (high learning signal)
 
-  - [ ] **Add filtering logic**
-    - [ ] Only add samples where speculative tokens were rejected (high learning signal)
-    - [ ] Add diversity sampling (avoid duplicate sequences)
-    - [ ] Add quality filtering (skip very short sequences)
+**Note:** Buffer is managed by EagleTrainer, not a separate class. This simplifies the architecture.
 
-- [ ] **Test data buffer**
-  - [ ] Write `tests/training/test_data_buffer.py`
-  - [ ] Test circular buffer behavior (eviction)
-  - [ ] Test sampling produces correct batch shapes
-  - [ ] Test thread-safety with concurrent adds/samples
+### 2.2 TrainingManager Implementation ✅ COMPLETE
+- [x] **Created `vllm/training/training_manager.py` (363 lines)**
+  - [x] `TrainingManager` class:
+    - [x] `__init__(vllm_config, training_config, inference_drafter)`:
+      - [x] Creates `TrainableEagleLlamaForCausalLM` from vllm_config
+      - [x] Copies initial weights from inference drafter
+      - [x] Initializes `EagleTrainer` (which manages buffer)
+      - [x] Tracks acceptance rates and training metrics
+      - [x] Async training state management
 
-### 2.2 Integration Point: EngineCore Level
-- [ ] **Modify `vllm/v1/engine/core.py`**
+    - [x] `collect_training_data(...)`:
+      - [x] Extracts data from EAGLE propose outputs:
+        - target_token_ids, target_positions, target_hidden_states
+        - draft_token_ids (from EagleProposer)
+        - sampled_token_ids (from RejectionSampler, with -1 for rejected)
+      - [x] Filters for rejected tokens (high learning signal)
+      - [x] Creates TrainingSample and adds to buffer
+      - [x] Tracks acceptance/rejection stats
+
+    - [x] `maybe_trigger_training()`:
+      - [x] Checks train_interval_requests
+      - [x] Checks if trainer.should_train() (buffer size, concurrent training)
+      - [x] Triggers async training via trainer.train_async()
+      - [x] Periodically syncs weights to inference model
+
+    - [x] `sync_weights_to_inference_model()`:
+      - [x] Copies weights: trainable_model → inference_drafter
+      - [x] Handles TP sharding via state_dict
+
+    - [x] `get_acceptance_rate()`: Calculate acceptance rate
+    - [x] `get_metrics()`: Return comprehensive training stats
+    - [x] `shutdown()`: Graceful shutdown with final checkpoint
+
+- [x] **Updated `vllm/training/__init__.py`** to export TrainingManager
+
+**Files created:**
+- `vllm/training/training_manager.py` (363 lines)
+
+**Commit:** `4b236b802` - "[Training] Add TrainingManager for online EAGLE training"
+
+### 2.3 Integration Point: Worker Level 🔄 NEXT STEP
+- [ ] **Modify `vllm/v1/worker/gpu_model_runner.py`**
   - [ ] Add `training_manager: Optional[TrainingManager]` field
   - [ ] In `__init__`:
-    - [ ] Check if training is enabled in config
-    - [ ] Initialize `TrainingManager` if enabled
-  - [ ] In `step()` method (after inference):
+    - [ ] Check if speculative_config has online training enabled
+    - [ ] Initialize TrainingManager if enabled (pass drafter model)
+  - [ ] In `sample_tokens()` after rejection sampling (~line 2762):
     ```python
-    # Existing code: schedule → execute → update
-    scheduler_output = self.scheduler.schedule()
-    model_output = self.model_executor.execute_model(scheduler_output)
-    engine_core_outputs = self.scheduler.update_from_output(...)
+    # After rejection sampling
+    sampler_output = self._sample(logits, spec_decode_metadata)
 
-    # NEW: Collect training data
-    if self.training_manager is not None:
-        self.training_manager.collect_training_data(
-            scheduler_output=scheduler_output,
-            model_output=model_output,
-            engine_core_outputs=engine_core_outputs
+    # NEW: Collect training data if training enabled
+    if self.training_manager is not None and spec_decode_metadata is not None:
+        await self.training_manager.collect_training_data(
+            target_token_ids=self.input_ids.gpu[token_indices],
+            target_positions=self._get_positions(token_indices),
+            target_hidden_states=hidden_states[token_indices],
+            draft_token_ids=self._draft_token_ids,
+            next_token_ids=next_token_ids,
+            sampled_token_ids=sampler_output.sampled_token_ids,
+            spec_decode_metadata=spec_decode_metadata,
         )
-
-        # NEW: Trigger training if conditions met
-        if self.training_manager.should_train():
-            self.training_manager.step()  # Async training
-
-    return engine_core_outputs, model_executed
+        await self.training_manager.maybe_trigger_training()
     ```
 
-- [ ] **Create `vllm/training/training_manager.py`**
-  - [ ] Define `TrainingManager` class:
-    - [ ] `__init__(vllm_config, training_config, drafter)`:
-      - [ ] Initialize data buffer
-      - [ ] Create trainable model (clone from drafter)
-      - [ ] Create trainer
-      - [ ] Set up async training executor (ThreadPoolExecutor or separate process)
-      - [ ] Initialize step counter
-      - [ ] Set up stats tracking
+### 2.4 Configuration Integration (deferred to Phase 3)
+- [ ] Add training config to SpeculativeConfig
+- [ ] Support "online_eagle" method flag
 
-    - [ ] `collect_training_data(scheduler_output, model_output, engine_core_outputs)`:
-      - [ ] Extract relevant data from outputs:
-        - [ ] Target model hidden states
-        - [ ] Speculative tokens proposed by drafter
-        - [ ] Accepted/rejected token masks
-        - [ ] Ground truth next tokens (from final sampled outputs)
-      - [ ] Filter samples:
-        - [ ] Keep only rejected speculative tokens (high learning signal)
-        - [ ] Skip very short sequences
-      - [ ] Add to buffer:
-        ```python
-        for i in range(batch_size):
-            if should_collect(i):
-                self.buffer.add(
-                    input_ids=token_ids[i],
-                    positions=positions[i],
-                    hidden_states=hidden_states[i],
-                    labels=ground_truth_labels[i]
-                )
-        ```
+### 2.5 Async Training Architecture ✅ COMPLETE (via asyncio)
+- [x] **Implemented async training with asyncio**
+  - [x] `EagleTrainer.train_async()` returns asyncio.Task
+  - [x] Uses `asyncio.Lock()` for thread-safe buffer access
+  - [x] TrainingManager tracks current_training_task
+  - [x] Checks if previous training complete before starting new one
+  - [x] All I/O operations are async-compatible
 
-    - [ ] `should_train() -> bool`:
-      - [ ] Check if buffer has enough samples (> batch_size)
-      - [ ] Check if enough steps have passed since last training
-      - [ ] Check if previous async training is complete
-      - [ ] Return True if ready to train
+**Note:** Using asyncio instead of Threading/Multiprocessing for simplicity. GPU operations still run synchronously but won't block the event loop during data collection.
 
-    - [ ] `step()`:
-      - [ ] Sample batch from buffer
-      - [ ] Submit training job to executor:
-        ```python
-        self.training_future = self.executor.submit(
-            self._train_batch, batch
-        )
-        ```
-      - [ ] Increment step counter
-
-    - [ ] `_train_batch(batch)` (runs in background):
-      - [ ] Run trainer.train_step(batch)
-      - [ ] Collect training stats
-      - [ ] Every N steps: copy weights to inference model
-      - [ ] Every M steps: save checkpoint
-      - [ ] Return stats
-
-    - [ ] `get_stats()`:
-      - [ ] Return training statistics (loss, buffer size, training steps, etc.)
-      - [ ] Check if async training is complete and collect results
-
-    - [ ] `shutdown()`:
-      - [ ] Wait for pending training jobs
-      - [ ] Save final checkpoint
-      - [ ] Clean up executor
-
-### 2.3 Worker-Level Support
-- [ ] **Modify `vllm/v1/worker/gpu_worker.py`**
-  - [ ] Add method `update_drafter_weights(weights)`:
-    - [ ] Receive new weights from training manager
-    - [ ] Update drafter model weights
-    - [ ] Handle TP sharding correctly
-    - [ ] Synchronize across TP group if needed
-
-  - [ ] Add method `get_drafter_weights()`:
-    - [ ] Extract current drafter weights
-    - [ ] Return in format compatible with trainable model
-
-- [ ] **Modify `vllm/v1/executor/abstract.py`**
-  - [ ] Add abstract method `update_drafter_weights(weights)`
-  - [ ] Add abstract method `get_drafter_weights()`
-
-- [ ] **Implement in concrete executors**
-  - [ ] `UniProcExecutor`: Direct call to worker
-  - [ ] `MultiprocExecutor`: RPC to all workers
-  - [ ] `RayExecutor`: Ray remote call to all workers
-
-### 2.4 Async Training Architecture
-- [ ] **Design decision: Threading vs Multiprocessing vs Remote**
-  - [ ] **Option A: Threading** (simplest)
-    - [ ] Use `ThreadPoolExecutor` for background training
-    - [ ] Training runs on same GPU as inference (time-sliced)
-    - [ ] Pros: Simple, no IPC overhead
-    - [ ] Cons: May impact inference latency (GIL contention)
-
-  - [ ] **Option B: Multiprocessing** (isolated)
-    - [ ] Use separate process for training
-    - [ ] Communicate via shared memory or queues
-    - [ ] Pros: No inference interference
-    - [ ] Cons: More complex, IPC overhead
-
-  - [ ] **Option C: Remote** (scalable)
-    - [ ] Training runs on separate machine
-    - [ ] Communicate via gRPC or Ray
-    - [ ] Pros: Fully decoupled, scalable
-    - [ ] Cons: Network overhead, most complex
-
-  - [ ] **Decision:** Start with Option A (threading), add Option C (remote) later
-
-- [ ] **Implement async training with threading**
-  - [ ] Use `ThreadPoolExecutor` with single worker thread
-  - [ ] Use CUDA streams to overlap training with inference:
-    ```python
-    self.inference_stream = torch.cuda.Stream()
-    self.training_stream = torch.cuda.Stream()
-
-    # In inference
-    with torch.cuda.stream(self.inference_stream):
-        model_output = self.model(...)
-
-    # In training (async)
-    with torch.cuda.stream(self.training_stream):
-        loss = self.trainable_model(...)
-        loss.backward()
-    ```
-  - [ ] Test that inference latency is not significantly impacted
-
-### 2.5 Testing Integration
+### 2.6 Testing Integration
 - [ ] **Create `tests/integration/test_online_training.py`**
   - [ ] **Test 1: End-to-end training**
     - [ ] Start server with online training enabled
