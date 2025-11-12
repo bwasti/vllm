@@ -1182,6 +1182,23 @@ def is_set(name: str):
     raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
 
 
+def enable_envs_cache():
+    """
+    Enable caching of environment variables.
+
+    After calling this function, all environment variable lookups will return
+    cached values instead of calling os.getenv() on every access. This improves
+    performance by assuming environment variables won't change after this point.
+    """
+    global environment_variables
+    # Evaluate all lambdas and replace them with the cached values
+    cached_vars = {
+        key: (lambda val=func(): val)
+        for key, func in environment_variables.items()
+    }
+    environment_variables = cached_vars
+
+
 def set_vllm_use_v1(use_v1: bool):
     if is_set("VLLM_USE_V1"):
         raise ValueError(

@@ -71,6 +71,17 @@ if (CUDA_FOUND AND NOT NVCC_EXECUTABLE)
     message(FATAL_ERROR "nvcc not found")
 endif()
 
+# Early CUDA setup to create missing nvToolsExt target for CUDA 12.9+
+# This must happen before find_package(Torch)
+if(VLLM_TARGET_DEVICE STREQUAL "cuda")
+  enable_language(CUDA)
+  find_package(CUDAToolkit REQUIRED)
+  # Workaround: PyTorch expects CUDA::nvToolsExt but CUDA 12.9+ uses header-only nvtx3
+  if(NOT TARGET CUDA::nvToolsExt)
+    add_library(CUDA::nvToolsExt INTERFACE IMPORTED)
+  endif()
+endif()
+
 #
 # Import torch cmake configuration.
 # Torch also imports CUDA (and partially HIP) languages with some customizations,

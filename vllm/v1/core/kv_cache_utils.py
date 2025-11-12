@@ -1152,3 +1152,40 @@ def unify_kv_cache_configs(kv_cache_configs: list[KVCacheConfig]):
         kv_cache_config.num_blocks = min_num_blocks
 
     return kv_cache_configs
+
+
+def get_kv_cache_configs(
+    vllm_config: VllmConfig,
+    kv_cache_specs: list[dict[str, KVCacheSpec]],
+    available_memory: list[int],
+) -> list[KVCacheConfig]:
+    """
+    Generate KV cache configurations for multiple workers/devices.
+
+    Args:
+        vllm_config: The global VllmConfig
+        kv_cache_specs: List of kv cache specs, one per worker
+        available_memory: List of available memory in bytes, one per worker
+
+    Returns:
+        List of KVCacheConfig, one per worker
+    """
+    return [
+        get_kv_cache_config(vllm_config, spec, mem)
+        for spec, mem in zip(kv_cache_specs, available_memory)
+    ]
+
+
+def generate_scheduler_kv_cache_config(
+        kv_cache_configs: list[KVCacheConfig]) -> KVCacheConfig:
+    """
+    Generate a unified KV cache configuration for the scheduler from multiple worker configs.
+
+    Args:
+        kv_cache_configs: List of KV cache configurations from workers
+
+    Returns:
+        Unified KVCacheConfig for the scheduler
+    """
+    unified_configs = unify_kv_cache_configs(kv_cache_configs)
+    return unified_configs[0]

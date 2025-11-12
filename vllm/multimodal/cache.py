@@ -98,3 +98,13 @@ class MultiModalCache:
             GiB_bytes * capacity_gb,
             getsizeof=lambda x: cls.get_item_size(x, debug=debug),
         )
+
+
+def engine_receiver_cache_from_config(vllm_config, mm_registry):
+    """
+    Create a multimodal receiver cache from the given config.
+
+    Returns None for now - multimodal caching is not yet implemented.
+    """
+    # TODO: Implement multimodal receiver cache if needed
+    return None
