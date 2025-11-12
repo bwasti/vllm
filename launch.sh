@@ -98,6 +98,7 @@ fi
 
 # Set up environment variables
 export LD_PRELOAD="/usr/local/fbcode/platform010/lib/libcublasLt.so:/usr/local/fbcode/platform010/lib/libcublas.so"
+export VLLM_ATTENTION_BACKEND="FLASHINFER"
 
 # Build speculative config
 SPEC_CONFIG="{\"model\": \"$DRAFT_PATH\", \"method\": \"$MODE\", \"num_speculative_tokens\": $NUM_SPEC_TOKENS"
