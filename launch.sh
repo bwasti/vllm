@@ -136,7 +136,10 @@ VLLM_CMD="python -m vllm.entrypoints.openai.api_server \
     --port $PORT \
     --disable-log-requests \
     --kv-cache-dtype auto \
-    --quantization compressed-tensors"
+    --quantization compressed-tensors \
+    --gpu-memory-utilization 0.85 \
+    --max-model-len 8192 \
+    --max-num-seqs 128"
 
 # Add online training flag if mode is online_eagle
 if [[ "$MODE" == "online_eagle" ]]; then
