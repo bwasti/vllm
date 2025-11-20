@@ -205,7 +205,8 @@ class EagleLlama4ForCausalLM(Llama4ForCausalLM):
             name, weight = self.permute_qk_weight_for_rotary(name, loaded_weight)
             if "lm_head" not in name:
                 name = "model." + name
-            process_eagle_weight(self, name)
+                process_eagle_weight(self, name)
+            # Don't call process_eagle_weight for lm_head since we skip it below
             return name, weight
 
         loader = AutoWeightsLoader(
