@@ -226,6 +226,13 @@ class EagleProposer:
         sampling_metadata: SamplingMetadata,
         mm_embed_inputs: tuple[list[torch.Tensor], torch.Tensor] | None = None,
     ) -> torch.Tensor:
+        # Synchronize all CUDA streams to avoid race conditions with async
+        # scheduling. This ensures all previous operations on all streams are
+        # complete before EAGLE modifies shared tensors. We must sync all
+        # streams, not just the current one, because vLLM uses multiple streams
+        # (e.g., output_copy_stream).
+        torch.cuda.synchronize()
+
         num_tokens = target_token_ids.shape[0]
         batch_size = next_token_ids.shape[0]
 
@@ -406,16 +413,12 @@ class EagleProposer:
                 positions += 1
                 exceeds_max_model_len = positions >= self.max_model_len
                 clamped_positions = torch.where(exceeds_max_model_len, 0, positions)
-            # For data integrity when async scheduling, we shouldn't use in place
-            # operations in case they are modified in next step's `prepare_input`
-            # of main model.
             # Increment the sequence lengths.
             common_attn_metadata.seq_lens += 1
             # This is an out-of-place operation to avoid modifying the original tensor.
             common_attn_metadata.seq_lens_cpu = common_attn_metadata.seq_lens_cpu + 1
             # For the requests that exceed the max model length, we set the
             # sequence length to 1 to minimize their overheads in attention.
-
             common_attn_metadata.seq_lens.masked_fill_(exceeds_max_model_len, 1)
 
             common_attn_metadata.num_computed_tokens_cpu = (
@@ -490,8 +493,19 @@ class EagleProposer:
             draft_token_ids = logits.argmax(dim=-1)
             draft_token_ids_list.append(draft_token_ids)
 
+            # Synchronize after each iteration to ensure all operations complete
+            # before the next iteration modifies shared buffers. This prevents
+            # intra-loop race conditions with async CUDA scheduling.
+            torch.cuda.synchronize()
+
         # [batch_size, num_speculative_tokens]
         draft_token_ids = torch.stack(draft_token_ids_list, dim=1)
+
+        # Synchronize before returning to ensure all EAGLE operations complete
+        # before the main model continues. This prevents race conditions where
+        # the main model starts using shared tensors while EAGLE is still working.
+        torch.cuda.synchronize()
+
         return draft_token_ids
 
     def prepare_next_token_ids_cpu(
@@ -1078,6 +1092,7 @@ class EagleProposer:
             elif (
                 hasattr(target_language_model, "lm_head")
                 and isinstance(target_language_model.lm_head.weight, torch.Tensor)
+                and hasattr(self.model, "lm_head")
                 and isinstance(self.model.lm_head.weight, torch.Tensor)
                 and torch.equal(
                     target_language_model.lm_head.weight, self.model.lm_head.weight
@@ -1097,7 +1112,7 @@ class EagleProposer:
             # MTP model
             share_lm_head = True
             logger.info(
-                "Detected MTP model. "
+                "Detected MTP model (no has_own_lm_head attribute). "
                 "Sharing target model lm_head weights with the draft model."
             )
 
@@ -1214,7 +1229,8 @@ def compute_probs_and_sample_next_token(
     if not sampling_metadata.all_random:
         is_greedy = temperature < _SAMPLING_EPS
         temperature = torch.where(is_greedy, 1.0, temperature)
-    logits.div_(temperature.view(-1, 1))
+    # Use out-of-place operation to avoid race conditions with async scheduling
+    logits = logits / temperature.view(-1, 1)
     probs = logits.softmax(dim=-1, dtype=torch.float32)
 
     # NOTE(woosuk): Currently, we ignore most of the sampling parameters in
