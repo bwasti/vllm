@@ -95,6 +95,16 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="Disable CUDA graph optimization (may help with memory issues)",
     )
+    parser.add_argument(
+        "--disable-async-scheduling",
+        action="store_true",
+        help="Disable async scheduling (test without async optimizations)",
+    )
+    parser.add_argument(
+        "--enable-async-scheduling",
+        action="store_true",
+        help="Enable async scheduling (improves latency and throughput)",
+    )
 
     # Workload configuration
     parser.add_argument(
@@ -217,6 +227,15 @@ def print_config(args: argparse.Namespace, num_gpus: int):
     print(f"GPU Memory Util:       {args.gpu_memory_utilization}")
     print(f"Max Model Length:      {args.max_model_len}")
     print(f"Max Batch Size:        {args.max_num_seqs}")
+
+    # Show async scheduling status
+    if args.enable_async_scheduling:
+        print("Async Scheduling:      ENABLED")
+    elif args.disable_async_scheduling:
+        print("Async Scheduling:      DISABLED")
+    else:
+        print("Async Scheduling:      DEFAULT (False)")
+
     print()
     print(f"Num Requests:          {args.num_requests}")
     print(f"Input Length:          {args.input_len} tokens")
@@ -293,11 +312,21 @@ def main():
         "enable_prefix_caching": False,
         "kv_cache_dtype": "auto",
         "config_format": "hf",  # Force HF format to avoid Mistral auto-detection
+        "disable_log_stats": False,  # Enable stats logging including acceptance rate
     }
 
     # Disable CUDA graph if requested (helps with debugging)
     if args.disable_cudagraph:
         llm_config["enforce_eager"] = True
+
+    # Handle async scheduling flags
+    if args.enable_async_scheduling and args.disable_async_scheduling:
+        print("ERROR: Cannot both enable and disable async scheduling!")
+        return 1
+    elif args.enable_async_scheduling:
+        llm_config["async_scheduling"] = True
+    elif args.disable_async_scheduling:
+        llm_config["async_scheduling"] = False
 
     # Add EAGLE configuration if enabled
     if not args.disable_eagle:
