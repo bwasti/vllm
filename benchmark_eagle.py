@@ -114,10 +114,15 @@ def parse_args() -> argparse.Namespace:
         help="Number of requests to benchmark",
     )
     parser.add_argument(
+        "--use-random-prompts",
+        action="store_true",
+        help="Use random token sequences instead of text prompts (worse for EAGLE)",
+    )
+    parser.add_argument(
         "--input-len",
         type=int,
         default=1024,
-        help="Input length in tokens",
+        help="Input length in tokens (only for --use-random-prompts)",
     )
     parser.add_argument(
         "--max-tokens",
@@ -211,6 +216,55 @@ def load_random_requests(
     return requests
 
 
+def load_text_requests(
+    num_requests: int,
+    output_len: int = 512,
+) -> list[SampleRequest]:
+    """Generate real text requests for benchmarking (better for EAGLE)."""
+    print(f"Generating {num_requests} text requests...")
+    print(f"  Output length: {output_len} tokens")
+
+    # Base prompts that will be repeated/cycled
+    base_prompts = [
+        "Tell me a story about a brave knight",
+        "Tell me a story about a curious scientist",
+        "Tell me a story about a wise owl",
+        "Tell me a story about an adventurous explorer",
+        "Tell me a story about a talented musician",
+        "Tell me a story about a clever detective",
+        "Tell me a story about a kind teacher",
+        "Tell me a story about a skilled chef",
+        "Tell me a story about a determined athlete",
+        "Tell me a story about a creative artist",
+        "Tell me a story about a loyal friend",
+        "Tell me a story about a fearless pilot",
+        "Tell me a story about a patient gardener",
+        "Tell me a story about a resourceful engineer",
+        "Tell me a story about a compassionate doctor",
+        "Tell me a story about a witty comedian",
+        "Tell me a story about a mysterious stranger",
+        "Tell me a story about a rebellious teenager",
+        "Tell me a story about a philosophical monk",
+        "Tell me a story about a charismatic leader",
+    ]
+
+    # Cycle through base prompts to generate requested number
+    requests = []
+    for i in range(num_requests):
+        prompt = base_prompts[i % len(base_prompts)]
+        requests.append(
+            SampleRequest(
+                request_id=f"bench_{i}",
+                prompt=prompt,
+                prompt_len=len(prompt.split()),  # Approximate
+                expected_output_len=output_len,
+            )
+        )
+
+    print(f"  Generated {len(requests)} text requests")
+    return requests
+
+
 def print_config(args: argparse.Namespace, num_gpus: int):
     """Print benchmark configuration."""
     print("=" * 80)
@@ -279,22 +333,33 @@ def main():
     print()
 
     # Generate requests
-    # Ensure input_len fits within max_model_len
-    actual_input_len = min(args.input_len, args.max_model_len - args.max_tokens - 100)
-    if actual_input_len != args.input_len:
-        print(
-            f"Warning: Adjusted input length from {args.input_len} to "
-            f"{actual_input_len} to fit within "
-            f"max_model_len={args.max_model_len}"
+    # Generate prompts
+    if args.use_random_prompts:
+        # Use random token sequences (worse for EAGLE)
+        # Ensure input_len fits within max_model_len
+        actual_input_len = min(
+            args.input_len, args.max_model_len - args.max_tokens - 100
         )
-        print()
+        if actual_input_len != args.input_len:
+            print(
+                f"Warning: Adjusted input length from {args.input_len} to "
+                f"{actual_input_len} to fit within "
+                f"max_model_len={args.max_model_len}"
+            )
+            print()
 
-    requests = load_random_requests(
-        tokenizer,
-        args.num_requests + args.warmup_requests,
-        input_len=actual_input_len,
-        output_len=args.max_tokens,
-    )
+        requests = load_random_requests(
+            tokenizer,
+            args.num_requests + args.warmup_requests,
+            input_len=actual_input_len,
+            output_len=args.max_tokens,
+        )
+    else:
+        # Use real text prompts (better for EAGLE)
+        requests = load_text_requests(
+            args.num_requests + args.warmup_requests,
+            output_len=args.max_tokens,
+        )
     print()
 
     # Initialize LLM
@@ -309,7 +374,7 @@ def main():
         "max_num_seqs": args.max_num_seqs,
         "dtype": "bfloat16",
         "trust_remote_code": True,
-        "enable_prefix_caching": False,
+        "enable_prefix_caching": True,  # CRITICAL: Required for EAGLE!
         "kv_cache_dtype": "auto",
         "config_format": "hf",  # Force HF format to avoid Mistral auto-detection
         "disable_log_stats": False,  # Enable stats logging including acceptance rate
