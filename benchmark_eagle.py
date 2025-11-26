@@ -106,6 +106,25 @@ def parse_args() -> argparse.Namespace:
         help="Enable async scheduling (improves latency and throughput)",
     )
 
+    # MoE optimization flags
+    parser.add_argument(
+        "--enable-expert-parallel",
+        action="store_true",
+        help="Enable expert parallelism for MoE layers (may improve load balance)",
+    )
+    parser.add_argument(
+        "--enable-eplb",
+        action="store_true",
+        help="Enable expert parallelism load balancing (requires --enable-expert-parallel)",
+    )
+    parser.add_argument(
+        "--all2all-backend",
+        type=str,
+        default=None,
+        choices=["naive", "pplx", "deepep_high_throughput", "deepep_low_latency"],
+        help="All2all backend for expert parallel communication",
+    )
+
     # Workload configuration
     parser.add_argument(
         "--num-requests",
@@ -407,6 +426,24 @@ def main():
         "config_format": "hf",  # Force HF format to avoid Mistral auto-detection
         "disable_log_stats": False,  # Enable stats logging including acceptance rate
     }
+
+    # MoE optimization flags
+    if args.enable_expert_parallel:
+        llm_config["enable_expert_parallel"] = True
+        print("Expert parallelism: ENABLED")
+
+    if args.enable_eplb:
+        llm_config["enable_eplb"] = True
+        print("Expert parallelism load balancing: ENABLED")
+        if not args.enable_expert_parallel:
+            print("WARNING: --enable-eplb requires --enable-expert-parallel")
+
+    if args.all2all_backend:
+        llm_config["all2all_backend"] = args.all2all_backend
+        print(f"All2all backend: {args.all2all_backend}")
+
+    if args.enable_expert_parallel or args.enable_eplb or args.all2all_backend:
+        print()  # Extra newline for readability
 
     # Disable CUDA graph if requested (helps with debugging)
     if args.disable_cudagraph or args.enable_profiling:
