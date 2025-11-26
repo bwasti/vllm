@@ -68,7 +68,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--num-speculative-tokens",
         type=int,
-        default=4,
+        default=1,
         help="Number of speculative tokens for EAGLE",
     )
     parser.add_argument(
@@ -139,7 +139,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--max-num-seqs",
         type=int,
-        default=12,
+        default=64,
         help="Max number of sequences in a batch",
     )
 
@@ -161,8 +161,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--output-trace",
         type=str,
-        default="./eagle_benchmark_trace.json",
-        help="Output Chrome trace file path",
+        default="./traces",
+        help="Output directory for profiling traces (vLLM creates multiple files)",
     )
     parser.add_argument(
         "--enable-profiling",
@@ -314,6 +314,34 @@ def main():
         "VLLM_ATTENTION_BACKEND", "FLASHINFER"
     )
 
+    # Set up profiling BEFORE initializing LLM
+    if args.enable_profiling:
+        print("=" * 80)
+        print("PROFILING ENABLED")
+        print("=" * 80)
+
+        # Create output directory
+        os.makedirs(args.output_trace, exist_ok=True)
+
+        # Warn if too few requests
+        if args.num_requests < 30:
+            print(
+                f"WARNING: Only {args.num_requests} requests - may not generate enough"
+            )
+            print("         profiling steps. Recommend at least 30 requests.")
+            print()
+
+        print(f"Setting VLLM_TORCH_PROFILER_DIR={args.output_trace}")
+        print("Note: vLLM will profile in worker processes and save traces")
+        print("Note: CUDA graphs will be disabled for profiling (better detail)")
+        print()
+
+        os.environ["VLLM_TORCH_PROFILER_DIR"] = args.output_trace
+        os.environ["VLLM_PROFILER_DELAY_ITERS"] = "1"  # Skip first 1 iter
+        os.environ["VLLM_PROFILER_MAX_ITERS"] = "20"  # Profile 20 iterations
+        if args.record_shapes:
+            os.environ["VLLM_TORCH_PROFILER_RECORD_SHAPES"] = "1"
+
     # Check GPU availability
     if not torch.cuda.is_available():
         print("ERROR: CUDA not available!")
@@ -381,8 +409,11 @@ def main():
     }
 
     # Disable CUDA graph if requested (helps with debugging)
-    if args.disable_cudagraph:
+    if args.disable_cudagraph or args.enable_profiling:
         llm_config["enforce_eager"] = True
+        if args.enable_profiling:
+            print("Note: CUDA graphs disabled for profiling (better trace detail)")
+            print()
 
     # Handle async scheduling flags
     if args.enable_async_scheduling and args.disable_async_scheduling:
@@ -436,31 +467,32 @@ def main():
     print(f"Benchmarking {len(bench_prompts)} requests...")
     print()
 
+    # Start profiling if enabled
     if args.enable_profiling:
-        # Profile with PyTorch profiler
-        with torch.profiler.profile(
-            activities=[
-                torch.profiler.ProfilerActivity.CPU,
-                torch.profiler.ProfilerActivity.CUDA,
-            ],
-            record_shapes=args.record_shapes,
-            profile_memory=True,
-            with_stack=True,
-        ) as prof:
-            start_time = time.perf_counter()
-            outputs = llm.generate(bench_prompts, sampling_params, use_tqdm=True)
-            elapsed_time = time.perf_counter() - start_time
+        print("Starting profiler...")
+        llm.start_profile()
 
-        # Export trace
+    # Run benchmark
+    start_time = time.perf_counter()
+    outputs = llm.generate(bench_prompts, sampling_params, use_tqdm=True)
+    torch.cuda.synchronize()  # Wait for completion
+    elapsed_time = time.perf_counter() - start_time
+
+    # Stop profiling if enabled
+    if args.enable_profiling:
+        print("Stopping profiler...")
+        llm.stop_profile()
+
+    if args.enable_profiling:
         print()
-        print(f"Exporting trace to {args.output_trace}...")
-        prof.export_chrome_trace(args.output_trace)
-        print("Trace exported")
+        print("=" * 80)
+        print(f"Profiling complete! Traces saved to: {args.output_trace}")
+        print("Look for files like:")
+        print(f"  {args.output_trace}/*.pt.trace.json.gz")
+        print(f"  {args.output_trace}/profiler_out_*.txt (summary)")
+        print("Decompress .gz files and upload JSON to https://ui.perfetto.dev/")
+        print("=" * 80)
     else:
-        # Run without profiling overhead
-        start_time = time.perf_counter()
-        outputs = llm.generate(bench_prompts, sampling_params, use_tqdm=True)
-        elapsed_time = time.perf_counter() - start_time
         print()
         print("Note: Profiling disabled. Use --enable-profiling to generate traces.")
 

@@ -239,7 +239,7 @@ class EagleProposer:
         # complete before EAGLE modifies shared tensors. We must sync all
         # streams, not just the current one, because vLLM uses multiple streams
         # (e.g., output_copy_stream).
-        torch.cuda.synchronize()
+        # torch.cuda.synchronize()
 
         num_tokens = target_token_ids.shape[0]
         batch_size = next_token_ids.shape[0]
@@ -515,7 +515,7 @@ class EagleProposer:
         # Synchronize before returning to ensure all EAGLE operations complete
         # before the main model continues. This prevents race conditions where
         # the main model starts using shared tensors while EAGLE is still working.
-        torch.cuda.synchronize()
+        # torch.cuda.synchronize()
 
         return draft_token_ids
 
