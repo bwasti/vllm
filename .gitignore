@@ -233,3 +233,6 @@ traces/
 traces_*/
 sweep_traces/
 *.pt.trace.json.gz
+eagle_benchmark_trace.json
+*.trace.json
+profiler_out_*.txt
