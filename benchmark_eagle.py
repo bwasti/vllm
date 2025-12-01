@@ -115,7 +115,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--enable-eplb",
         action="store_true",
-        help="Enable expert parallelism load balancing (requires --enable-expert-parallel)",
+        help="Enable expert parallelism load balancing "
+        "(requires --enable-expert-parallel)",
     )
     parser.add_argument(
         "--all2all-backend",
@@ -123,6 +124,18 @@ def parse_args() -> argparse.Namespace:
         default=None,
         choices=["naive", "pplx", "deepep_high_throughput", "deepep_low_latency"],
         help="All2all backend for expert parallel communication",
+    )
+    parser.add_argument(
+        "--disable-custom-all-reduce",
+        action="store_true",
+        help="Disable custom all-reduce kernel and use NCCL instead",
+    )
+    parser.add_argument(
+        "--expert-placement-strategy",
+        type=str,
+        default=None,
+        choices=["linear", "round_robin"],
+        help="Expert placement: linear (contiguous) or round_robin (interleaved)",
     )
 
     # Workload configuration
@@ -441,6 +454,14 @@ def main():
     if args.all2all_backend:
         llm_config["all2all_backend"] = args.all2all_backend
         print(f"All2all backend: {args.all2all_backend}")
+
+    if args.disable_custom_all_reduce:
+        llm_config["disable_custom_all_reduce"] = True
+        print("Custom all-reduce: DISABLED (using NCCL)")
+
+    if args.expert_placement_strategy:
+        llm_config["expert_placement_strategy"] = args.expert_placement_strategy
+        print(f"Expert placement strategy: {args.expert_placement_strategy}")
 
     if args.enable_expert_parallel or args.enable_eplb or args.all2all_backend:
         print()  # Extra newline for readability
